@@ -1,0 +1,45 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+
+# ---- Node / Tauri (for later desktop shell upgrade) ----
+node_modules/
+dist/
+dist-ssr/
+*.local
+src-tauri/target/
+
+# ---- Rust (Tauri) ----
+target/
+Cargo.lock
+
+# ---- Secrets / local config ----
+.env
+.env.*
+!.env.example
+config.local.*
+*.key
+*.pem
+secrets/
+
+# ---- Data (recordings, transcripts, local DB) ----
+data/
+*.sqlite
+*.db
+recordings/
+transcripts/
+
+# ---- IDE / OS ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
