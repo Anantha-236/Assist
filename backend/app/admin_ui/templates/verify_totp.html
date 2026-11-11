@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Enter code — Assist Admin</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body class="login-body">
+<form method="post" action="/admin/login/verify-totp" class="login-card">
+    <h1>Enter your code</h1>
+    <p class="muted">
+        Open your authenticator app and enter the 6-digit code for
+        <strong>{{ email }}</strong>.
+    </p>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    <input type="hidden" name="email" value="{{ email }}">
+    <input type="text" name="code"
+           placeholder="123456"
+           maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+           required autofocus
+           style="text-align:center;font-size:24px;letter-spacing:8px;">
+    <button type="submit">Sign in</button>
+    <p class="muted small" style="text-align:center;">
+        <a href="/admin/login">Use a different email</a>
+    </p>
+</form>
+</body>
+</html>

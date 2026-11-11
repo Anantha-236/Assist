@@ -6,13 +6,12 @@
     <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body class="login-body">
-<form method="post" action="/admin/login/request-otp" class="login-card">
+<form method="post" action="/admin/login/start" class="login-card">
     <h1>Assist Admin</h1>
-    <p class="muted">Enter your admin email to receive a login code.</p>
+    <p class="muted">Sign in with an authenticator app (Google Authenticator, Authy, or Microsoft Authenticator).</p>
     {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
-    <input type="email" name="email" placeholder="admin@yourdomain.com"
-           required autofocus>
-    <button type="submit">Send code</button>
+    <input type="email" name="email" placeholder="admin@yourdomain.com" required autofocus>
+    <button type="submit">Continue</button>
 </form>
 </body>
 </html>

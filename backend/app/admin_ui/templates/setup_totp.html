@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Set up 2FA — Assist Admin</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body class="login-body">
+<form method="post" action="/admin/setup-totp/verify" class="login-card">
+    <h1>Set up two-factor auth</h1>
+    <p class="muted">
+        Open Google Authenticator, Authy, or Microsoft Authenticator
+        and scan this QR code with your phone.
+    </p>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    <img src="data:image/png;base64,{{ qr_b64 }}"
+         alt="TOTP QR code"
+         style="width:220px;height:220px;align-self:center;border-radius:8px;background:#fff;padding:8px;">
+    <details>
+        <summary class="muted small" style="cursor:pointer;">Can't scan? Show manual entry code</summary>
+        <p class="muted small" style="margin-top:8px;">
+            Manual code:
+            <code style="user-select:all;">{{ secret }}</code>
+        </p>
+        <p class="muted small">
+            In your app: Add account → Enter setup key → paste the code above.
+        </p>
+    </details>
+    <input type="text" name="code"
+           placeholder="6-digit code from app"
+           maxlength="6" inputmode="numeric" autocomplete="one-time-code"
+           required autofocus
+           style="text-align:center;font-size:22px;letter-spacing:6px;">
+    <button type="submit">Verify and sign in</button>
+    <p class="muted small" style="text-align:center;">
+        <a href="/admin/login">Use a different email</a>
+    </p>
+</form>
+</body>
+</html>

@@ -76,13 +76,22 @@ def init_db():
                 expires_at TEXT NOT NULL,
                 used INTEGER DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS admin_totp (
+                email TEXT PRIMARY KEY,
+                secret TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
         """)
 
         # ---- Migrate activation_keys columns ----
 
-        cols = {r["name"] for r in c.execute(
-            "PRAGMA table_info(activation_keys)"
-        ).fetchall()}
+        cols = {
+            r["name"]
+            for r in c.execute(
+                "PRAGMA table_info(activation_keys)"
+            ).fetchall()
+        }
 
         if "tier" not in cols:
             c.execute(
@@ -96,9 +105,12 @@ def init_db():
 
         # ---- Migrate transcript session_id ----
 
-        tcols = {r["name"] for r in c.execute(
-            "PRAGMA table_info(transcripts)"
-        ).fetchall()}
+        tcols = {
+            r["name"]
+            for r in c.execute(
+                "PRAGMA table_info(transcripts)"
+            ).fetchall()
+        }
 
         if "session_id" not in tcols:
             c.execute(
@@ -111,9 +123,12 @@ def init_db():
 
         # ---- Migrate activation_keys email ----
 
-        kcols = {r["name"] for r in c.execute(
-            "PRAGMA table_info(activation_keys)"
-        ).fetchall()}
+        kcols = {
+            r["name"]
+            for r in c.execute(
+                "PRAGMA table_info(activation_keys)"
+            ).fetchall()
+        }
 
         if "email" not in kcols:
             c.execute(
@@ -165,6 +180,46 @@ def verify_admin_otp(email: str, otp: str) -> bool:
     return False
 
 
+# ---- admin TOTP ----
+
+def get_totp_secret(email: str) -> str | None:
+    """Retrieve the stored TOTP secret for an admin email."""
+
+    with _conn() as c:
+        row = c.execute(
+            "SELECT secret FROM admin_totp WHERE email = ?",
+            (email,),
+        ).fetchone()
+
+        return row["secret"] if row else None
+
+
+def set_totp_secret(email: str, secret: str):
+    """Create or update an admin's TOTP secret."""
+
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO admin_totp (email, secret, created_at) "
+            "VALUES (?, ?, ?) "
+            "ON CONFLICT(email) DO UPDATE SET secret = excluded.secret",
+            (
+                email,
+                secret,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def clear_totp_secret(email: str):
+    """Delete an admin's stored TOTP secret."""
+
+    with _conn() as c:
+        c.execute(
+            "DELETE FROM admin_totp WHERE email = ?",
+            (email,),
+        )
+
+
 # ---- keys ----
 
 def insert_key(key_id, key_value, label=None):
@@ -179,14 +234,16 @@ def insert_key(key_id, key_value, label=None):
 def get_key_by_value(key_value):
     with _conn() as c:
         return c.execute(
-            "SELECT * FROM activation_keys WHERE key_value = ?", (key_value,)
+            "SELECT * FROM activation_keys WHERE key_value = ?",
+            (key_value,),
         ).fetchone()
 
 
 def get_key_by_id(key_id):
     with _conn() as c:
         return c.execute(
-            "SELECT * FROM activation_keys WHERE key_id = ?", (key_id,)
+            "SELECT * FROM activation_keys WHERE key_id = ?",
+            (key_id,),
         ).fetchone()
 
 
@@ -249,9 +306,12 @@ def get_profile(key_id):
 
 def list_keys():
     with _conn() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT * FROM activation_keys ORDER BY created_at DESC"
-        ).fetchall()]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT * FROM activation_keys ORDER BY created_at DESC"
+            ).fetchall()
+        ]
 
 
 def count_keys():
@@ -332,17 +392,21 @@ def get_today_usage_all():
 
 def get_usage_history(key_id, days=30):
     with _conn() as c:
-        return [dict(r) for r in c.execute(
-            "SELECT day, count FROM usage WHERE key_id = ? "
-            "ORDER BY day DESC LIMIT ?",
-            (key_id, days),
-        ).fetchall()]
+        return [
+            dict(r)
+            for r in c.execute(
+                "SELECT day, count FROM usage WHERE key_id = ? "
+                "ORDER BY day DESC LIMIT ?",
+                (key_id, days),
+            ).fetchall()
+        ]
 
 
 def get_total_usage_for_key(key_id):
     with _conn() as c:
         row = c.execute(
-            "SELECT COALESCE(SUM(count), 0) AS total FROM usage WHERE key_id = ?",
+            "SELECT COALESCE(SUM(count), 0) AS total "
+            "FROM usage WHERE key_id = ?",
             (key_id,),
         ).fetchone()
 
@@ -403,7 +467,7 @@ def insert_transcript(transcript_id, key_id, started, ended, segments):
         c.execute(
             "INSERT INTO transcripts "
             "(transcript_id, key_id, session_started, session_ended, "
-            " uploaded_at, segments_json, segment_count) "
+            "uploaded_at, segments_json, segment_count) "
             "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 transcript_id,
@@ -446,7 +510,8 @@ def upsert_transcript(session_id, key_id, started, ended, segments):
 
         c.execute(
             "INSERT INTO transcripts (transcript_id, session_id, key_id, "
-            " session_started, session_ended, uploaded_at, segments_json, segment_count) "
+            "session_started, session_ended, uploaded_at, segments_json, "
+            "segment_count) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 tid,
@@ -477,7 +542,7 @@ def list_transcripts_for_key(key_id, limit=50):
     with _conn() as c:
         rows = c.execute(
             "SELECT transcript_id, session_started, session_ended, "
-            "       uploaded_at, segment_count "
+            "uploaded_at, segment_count "
             "FROM transcripts WHERE key_id = ? "
             "ORDER BY session_started DESC LIMIT ?",
             (key_id, limit),
@@ -490,7 +555,7 @@ def list_all_transcripts(limit=100):
     with _conn() as c:
         rows = c.execute(
             "SELECT transcript_id, key_id, session_started, "
-            "       uploaded_at, segment_count "
+            "uploaded_at, segment_count "
             "FROM transcripts ORDER BY session_started DESC LIMIT ?",
             (limit,),
         ).fetchall()

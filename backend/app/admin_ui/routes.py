@@ -1,16 +1,21 @@
 ﻿
-"""Admin dashboard: OTP login, overview, keys, transcripts, settings."""
+"""Admin dashboard: TOTP login, overview, keys, transcripts, settings, and TOTP."""
 
 from pathlib import Path
+import base64
+import io
 
 import httpx
-from fastapi import APIRouter, Form, Request
+import pyotp
+import qrcode
+
+from fastapi import APIRouter, Form, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 from .. import auth, db, quota
-from ..config import ADMIN_EMAILS, DAILY_QUESTION_LIMIT
-from ..email_service import send_activation_key_email, send_otp_email
+from ..config import ADMIN_EMAILS, ADMIN_PASSWORD, DAILY_QUESTION_LIMIT
+from ..email_service import send_activation_key_email
 
 
 router = APIRouter(prefix="/admin", tags=["admin-ui"])
@@ -39,91 +44,153 @@ def _render(request: Request, name: str, **kw):
     )
 
 
-# ---------------- AUTH (OTP) ----------------
+# ---------------- auth (TOTP) ----------------
 
 @router.get("/login", response_class=HTMLResponse)
-def login_form(
-    request: Request,
-    error: str = "",
-    step: str = "email",
-):
-    if step == "otp":
-        email = request.session.get("otp_email", "")
+def login_form(request: Request, error: str = ""):
+    return _render(request, "login.html", error=error, active="login")
 
-        if not email:
-            return RedirectResponse(
-                "/admin/login",
-                status_code=303,
-            )
 
-        return _render(
-            request,
-            "login_otp.html",
-            email=email,
-            error=error,
+@router.post("/login/start")
+def login_start(request: Request, email: str = Form(...)):
+    email_lower = email.strip().lower()
+
+    if email_lower not in [e.lower() for e in ADMIN_EMAILS]:
+        return RedirectResponse(
+            "/admin/login?error=Email+not+authorised",
+            status_code=303,
         )
+
+    if db.get_totp_secret(email_lower):
+        # Returning admin -> enter code
+        return RedirectResponse(
+            f"/admin/login/verify-totp?email={email_lower}",
+            status_code=303,
+        )
+
+    # First-time admin -> setup
+    return RedirectResponse(
+        f"/admin/setup-totp?email={email_lower}",
+        status_code=303,
+    )
+
+
+@router.get("/setup-totp", response_class=HTMLResponse)
+def setup_totp(request: Request, email: str = "", error: str = ""):
+    email_lower = email.strip().lower()
+
+    if email_lower not in [e.lower() for e in ADMIN_EMAILS]:
+        return RedirectResponse(
+            "/admin/login?error=Email+not+authorised",
+            status_code=303,
+        )
+
+    secret = pyotp.random_base32()
+    request.session["pending_totp_secret"] = secret
+    request.session["pending_totp_email"] = email_lower
+
+    uri = pyotp.totp.TOTP(secret).provisioning_uri(
+        name=email_lower,
+        issuer_name="Assist Admin",
+    )
+
+    img = qrcode.make(uri)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+
+    qr_b64 = base64.b64encode(buf.getvalue()).decode()
 
     return _render(
         request,
-        "login.html",
+        "setup_totp.html",
+        email=email_lower,
+        secret=secret,
+        qr_b64=qr_b64,
         error=error,
         active="login",
     )
 
 
-@router.post("/login/request-otp")
-async def request_otp(
+@router.post("/setup-totp/verify")
+def setup_totp_verify(request: Request, code: str = Form(...)):
+    secret = request.session.get("pending_totp_secret")
+    email = request.session.get("pending_totp_email")
+
+    if not secret or not email:
+        return RedirectResponse(
+            "/admin/login?error=Setup+session+expired+—+try+again",
+            status_code=303,
+        )
+
+    if not pyotp.TOTP(secret).verify(code.strip(), valid_window=1):
+        return RedirectResponse(
+            f"/admin/setup-totp?email={email}&error=Invalid+code+—+try+again",
+            status_code=303,
+        )
+
+    db.set_totp_secret(email, secret)
+
+    request.session.pop("pending_totp_secret", None)
+    request.session.pop("pending_totp_email", None)
+
+    request.session["admin"] = True
+    request.session["admin_email"] = email
+
+    return RedirectResponse("/admin/", status_code=303)
+
+
+@router.get("/login/verify-totp", response_class=HTMLResponse)
+def login_verify_totp_form(
     request: Request,
-    email: str = Form(...),
+    email: str = "",
+    error: str = "",
 ):
     email_lower = email.strip().lower()
 
     if email_lower not in [e.lower() for e in ADMIN_EMAILS]:
         return RedirectResponse(
-            "/admin/login?step=otp&error=If+authorised,+a+code+was+sent",
+            "/admin/login?error=Email+not+authorised",
             status_code=303,
         )
 
-    otp = db.create_admin_otp(email_lower)
+    if not db.get_totp_secret(email_lower):
+        return RedirectResponse(
+            f"/admin/setup-totp?email={email_lower}",
+            status_code=303,
+        )
 
-    sent = await send_otp_email(email_lower, otp)
-
-    if not sent:
-        # SMTP not configured — log the code so testing works.
-        print(f"[OTP] {email_lower} -> {otp}")
-
-    request.session["otp_email"] = email_lower
-
-    return RedirectResponse(
-        "/admin/login?step=otp",
-        status_code=303,
+    return _render(
+        request,
+        "verify_totp.html",
+        email=email_lower,
+        error=error,
+        active="login",
     )
 
 
-@router.post("/login/verify-otp")
-def verify_otp(
+@router.post("/login/verify-totp")
+def login_verify_totp(
     request: Request,
-    otp: str = Form(...),
+    email: str = Form(...),
+    code: str = Form(...),
 ):
-    email = request.session.get("otp_email")
+    email_lower = email.strip().lower()
+    secret = db.get_totp_secret(email_lower)
 
-    if not email:
+    if not secret:
         return RedirectResponse(
-            "/admin/login",
+            f"/admin/setup-totp?email={email_lower}",
             status_code=303,
         )
 
-    if db.verify_admin_otp(email, otp.strip()):
-        request.session.pop("otp_email", None)
+    if pyotp.TOTP(secret).verify(code.strip(), valid_window=1):
         request.session["admin"] = True
+        request.session["admin_email"] = email_lower
 
-        return RedirectResponse(
-            "/admin/",
-            status_code=303,
-        )
+        return RedirectResponse("/admin/", status_code=303)
 
     return RedirectResponse(
-        "/admin/login?step=otp&error=Invalid+or+expired+code",
+        f"/admin/login/verify-totp?email={email_lower}&error=Invalid+code",
         status_code=303,
     )
 
@@ -131,11 +198,29 @@ def verify_otp(
 @router.get("/logout")
 def logout(request: Request):
     request.session.clear()
+    return RedirectResponse("/admin/login", status_code=303)
 
-    return RedirectResponse(
-        "/admin/login",
-        status_code=303,
-    )
+
+# ---------------- TOTP reset (admin password) ----------------
+# If you lose your authenticator, POST here with your admin password.
+#
+# Test with:
+# curl -X POST https://.../admin/api/reset-totp \
+#      -H "X-Admin-Password: <your password>" \
+#      -d "email=your-admin-email@example.com"
+
+
+@router.post("/api/reset-totp")
+def reset_totp_api(
+    email: str = Form(...),
+    x_admin_password: str | None = Header(None),
+):
+    if x_admin_password != ADMIN_PASSWORD:
+        raise HTTPException(401, "admin password required")
+
+    db.clear_totp_secret(email.strip().lower())
+
+    return {"ok": True, "reset": email}
 
 
 # ---------------- OVERVIEW ----------------
