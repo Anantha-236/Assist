@@ -9,4 +9,5 @@ python-multipart>=0.0.9
 itsdangerous>=2.1
 aiosmtplib>=3.0
 pycaw>=20240210
-comtypes>=1.2
+comtypes>=1.2pyotp>=2.9
+qrcode[pil]>=7.4
