@@ -3,15 +3,16 @@ services:
     name: assist-backend
     runtime: python
     plan: free
+    rootDir: backend
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: "3.13.0"
+        value: "3.12.7"
       - key: ASSIST_DB
         value: ./data/assist.db
       - key: ASSIST_ADMIN_PASSWORD
-        sync: false           # set in dashboard
+        sync: false
       - key: ASSIST_JWT_SECRET
         sync: false
       - key: ASSIST_SESSION_SECRET
@@ -38,5 +39,7 @@ services:
         sync: false
       - key: SMTP_FROM_EMAIL
         sync: false
+      - key: SMTP_FROM_NAME
+        value: Assist
       - key: ADMIN_EMAILS
         sync: false
