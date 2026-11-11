@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Settings{% endblock %}
+{% block content %}
+<h2>Settings</h2>
+
+{% if request.query_params.get('saved') %}
+<div class="flash success">Settings saved.</div>
+{% endif %}
+
+<form method="post" action="/admin/settings" class="stack">
+    <label class="toggle">
+        <input type="checkbox" name="answer_enabled" value="1"
+               {% if settings.get('answer_enabled', '1') == '1' %}checked{% endif %}>
+        Answer service enabled (kill switch — turn off to refuse all /answer calls)
+    </label>
+
+    <label>Max tokens per answer
+        <input type="number" name="max_tokens" min="20" max="2000"
+               value="{{ settings.get('max_tokens', '80') }}">
+    </label>
+
+    <label>System prompt note (appended to base prompt)
+        <textarea name="system_prompt_note" rows="4"
+                  placeholder="e.g. Answer as if the user is a senior engineer.">{{ settings.get('system_prompt_note', '') }}</textarea>
+    </label>
+
+    <button type="submit">Save</button>
+</form>
+{% endblock %}

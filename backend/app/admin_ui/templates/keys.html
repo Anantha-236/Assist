@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Keys{% endblock %}
+{% block content %}
+<h2>Activation keys</h2>
+
+<form method="post" action="/admin/keys" class="inline-form">
+    <input type="text" name="label" placeholder="Label (optional)" maxlength="60">
+    <button type="submit">Create key</button>
+</form>
+
+<table class="table">
+<thead>
+<tr>
+    <th>Key</th><th>Label</th><th>Status</th>
+    <th>Today</th><th>Total</th><th>Created</th>
+</tr>
+</thead>
+<tbody>
+{% for k in keys %}
+<tr>
+    <td><a href="/admin/keys/{{ k.key_id }}"><code>{{ k.key_value }}</code></a></td>
+    <td>{{ k.label or '—' }}</td>
+    <td>
+        {% if k.revoked %}<span class="badge red">revoked</span>
+        {% elif k.device_fingerprint %}<span class="badge green">bound</span>
+        {% else %}<span class="badge">unused</span>{% endif %}
+    </td>
+    <td>{{ k.usage_today }}</td>
+    <td>{{ k.usage_total }}</td>
+    <td class="muted small">{{ k.created_at[:10] }}</td>
+</tr>
+{% else %}
+<tr><td colspan="6" class="muted">No keys yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

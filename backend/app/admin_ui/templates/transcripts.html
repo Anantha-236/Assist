@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Transcripts{% endblock %}
+{% block content %}
+<h2>Transcripts (last 100)</h2>
+<table class="table">
+<thead>
+<tr><th>Session</th><th>Key</th><th>Segments</th><th>Uploaded</th><th></th></tr>
+</thead>
+<tbody>
+{% for t in transcripts %}
+<tr>
+    <td>{{ t.session_started[:19] }}</td>
+    <td><a href="/admin/keys/{{ t.key_id }}"><code>{{ t.key_id[:8] }}</code></a></td>
+    <td>{{ t.segment_count }}</td>
+    <td class="muted small">{{ t.uploaded_at[:19] }}</td>
+    <td><a href="/admin/transcripts/{{ t.transcript_id }}">View</a></td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">No transcripts yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

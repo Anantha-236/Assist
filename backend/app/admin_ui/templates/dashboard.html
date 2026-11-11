@@ -1,0 +1,127 @@
+
+{% extends "base.html" %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<h2>Overview</h2>
+
+{% if settings.get('answer_enabled', '1') != '1' %}
+<div class="flash warn">The answer service is currently disabled (kill switch is on).</div>
+{% endif %}
+
+<div class="grid">
+    <div class="card">
+        <div class="label">Total keys</div>
+        <div class="value">{{ total_keys }}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Active keys</div>
+        <div class="value">{{ active_keys }}</div>
+    </div>
+
+    <div class="card">
+        <div class="label">Questions today</div>
+        <div class="value">
+            {{ usage_today }}
+            <span class="muted"> / {{ daily_limit }} max per key</span>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="label">Tokens today</div>
+        <div class="value">
+            {{ token_today.prompt_tokens + token_today.completion_tokens }}
+            <span class="muted">
+                ({{ token_today.prompt_tokens }} in / {{ token_today.completion_tokens }} out)
+            </span>
+        </div>
+    </div>
+</div>
+
+<h3>OpenRouter quota</h3>
+<div class="card">
+    {% if quota.available %}
+        <div class="quota-row">
+            <div>
+                <div class="label">Used today</div>
+                <div class="value">{{ quota.used }} / {{ quota.limit }}</div>
+            </div>
+
+            <div>
+                <div class="label">Remaining</div>
+                <div class="value">{{ quota.remaining }}</div>
+            </div>
+
+            <div class="quota-bar">
+                <div class="quota-fill {% if quota.low %}low{% endif %}"
+                     style="width: {{ (quota.fraction_left * 100)|round(0) }}%">
+                </div>
+            </div>
+        </div>
+    {% else %}
+        <p class="muted">Unavailable — {{ quota.reason }}</p>
+        <p class="muted small">
+            Set a real API key in <code>backend/.env</code> and restart.
+        </p>
+    {% endif %}
+</div>
+
+<!-- System Status -->
+<h3>System status</h3>
+<div class="grid">
+    <div class="card">
+        <div class="label">OpenRouter API</div>
+
+        <div class="value" id="api-status"
+             style="font-size:13px; color: var(--muted);">
+            not tested
+        </div>
+
+        <button id="api-test-btn" style="margin-top:10px;">
+            Test key
+        </button>
+    </div>
+</div>
+
+<script>
+document.getElementById('api-test-btn').onclick = async (e) => {
+    const btn = e.target;
+    const out = document.getElementById('api-status');
+
+    btn.disabled = true;
+    btn.textContent = 'testing…';
+
+    out.textContent = 'testing…';
+    out.style.color = 'var(--muted)';
+
+    try {
+        const r = await fetch('/admin/api-test', {
+            method: 'POST'
+        });
+
+        const j = await r.json();
+
+        if (j.ok) {
+            out.innerHTML =
+                '✓ <code>' + j.model + '</code><br>"' + j.reply + '"';
+
+            out.style.color = 'var(--green)';
+        } else {
+            out.textContent =
+                '✗ ' + (j.error || ('HTTP ' + j.status));
+
+            out.style.color = 'var(--red)';
+        }
+
+    } catch (err) {
+        out.textContent = '✗ ' + err;
+        out.style.color = 'var(--red)';
+
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Test key';
+    }
+};
+</script>
+
+{% endblock %}

@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Enter Code — Assist Admin</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body class="login-body">
+<form method="post" action="/admin/login/verify-otp" class="login-card">
+    <h1>Check your email</h1>
+    <p class="muted">A 6-digit code was sent to <strong>{{ email }}</strong>.</p>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    <input type="text" name="otp" placeholder="123456" inputmode="numeric"
+           autocomplete="one-time-code" maxlength="6" required autofocus
+           style="text-align: center; font-size: 24px; letter-spacing: 8px;">
+    <button type="submit">Verify</button>
+    <p class="muted small" style="text-align: center;">
+        <a href="/admin/login">Use a different email</a>
+    </p>
+</form>
+</body>
+</html>

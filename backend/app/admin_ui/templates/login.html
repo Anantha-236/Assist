@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Login — Assist Admin</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body class="login-body">
+<form method="post" action="/admin/login/request-otp" class="login-card">
+    <h1>Assist Admin</h1>
+    <p class="muted">Enter your admin email to receive a login code.</p>
+    {% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+    <input type="email" name="email" placeholder="admin@yourdomain.com"
+           required autofocus>
+    <button type="submit">Send code</button>
+</form>
+</body>
+</html>

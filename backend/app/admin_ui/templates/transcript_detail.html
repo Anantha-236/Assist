@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Transcript{% endblock %}
+{% block content %}
+<h2>Transcript</h2>
+<p class="muted">
+    Key: <a href="/admin/keys/{{ t.key_id }}"><code>{{ t.key_id }}</code></a> ·
+    {{ t.session_started[:19] }} → {{ t.session_ended[:19] }} ·
+    {{ t.segment_count }} segments
+</p>
+
+<div class="transcript">
+{% for s in t.segments %}
+    <div class="seg">
+        <span class="seg-t">{{ "%.1f"|format(s.t) }}s</span>
+        <span class="seg-text">{{ s.text }}</span>
+    </div>
+{% endfor %}
+</div>
+{% endblock %}

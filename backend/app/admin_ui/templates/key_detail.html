@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Key {{ k.key_value }}{% endblock %}
+{% block content %}
+<h2>Key detail</h2>
+
+{% if just_created %}
+<div class="flash success">
+    Key created. Copy it now — you won't see it again after leaving this page.<br>
+    <code style="font-size:14px">{{ k.key_value }}</code>
+</div>
+{% endif %}
+
+<div class="grid">
+    <div class="card">
+        <div class="label">Key</div>
+        <div class="value mono">{{ k.key_value }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Status</div>
+        <div class="value">
+            {% if k.revoked %}<span class="badge red">revoked</span>
+            {% elif k.device_fingerprint %}<span class="badge green">bound</span>
+            {% else %}<span class="badge">unused</span>{% endif %}
+        </div>
+    </div>
+    <div class="card">
+        <div class="label">Questions today / total</div>
+        <div class="value">{{ k.usage_today }} / {{ k.usage_total }}</div>
+    </div>
+    <div class="card">
+        <div class="label">Tokens (in / out)</div>
+        <div class="value">{{ k.tokens.prompt_tokens }} / {{ k.tokens.completion_tokens }}</div>
+    </div>
+</div>
+
+<h3>User profile</h3>
+<form method="post" action="/admin/keys/{{ k.key_id }}/profile" class="stack">
+    <label>Role
+        <input type="text" name="role" value="{{ profile.role if profile else '' }}"
+               placeholder="Backend Engineer">
+    </label>
+    <label>Experience
+        <input type="text" name="experience" value="{{ profile.experience if profile else '' }}"
+               placeholder="3 years">
+    </label>
+    <label>Skills
+        <input type="text" name="skills" value="{{ profile.skills if profile else '' }}"
+               placeholder="Python, Kafka, distributed systems">
+    </label>
+    <button type="submit">Save profile</button>
+</form>
+
+<h3>Usage — last 30 days</h3>
+{% if history %}
+<div class="bar-chart">
+    {% set max_count = history|map(attribute='count')|max %}
+    {% for h in history|reverse %}
+    <div class="bar" title="{{ h.day }}: {{ h.count }}"
+         style="height: {{ (h.count / (max_count or 1) * 100)|round(0) }}%"></div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="muted">No usage yet.</p>
+{% endif %}
+
+<h3>Recent transcripts</h3>
+{% if transcripts %}
+<table class="table">
+<thead><tr><th>Session</th><th>Segments</th><th>Uploaded</th><th></th></tr></thead>
+<tbody>
+{% for t in transcripts %}
+<tr>
+    <td>{{ t.session_started[:19] }}</td>
+    <td>{{ t.segment_count }}</td>
+    <td class="muted small">{{ t.uploaded_at[:19] }}</td>
+    <td><a href="/admin/transcripts/{{ t.transcript_id }}">View</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<p class="muted">No transcripts uploaded yet.</p>
+{% endif %}
+
+{% if not k.revoked %}
+<form method="post" action="/admin/keys/{{ k.key_id }}/revoke"
+      onsubmit="return confirm('Revoke this key? The client will stop working.');">
+    <button type="submit" class="danger">Revoke key</button>
+</form>
+{% endif %}
+{% endblock %}

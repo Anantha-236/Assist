@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{% block title %}Admin{% endblock %} — Assist</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body>
+<div class="layout">
+    <aside class="sidebar">
+        <h1 class="brand">Assist<span>.</span></h1>
+        <nav>
+            <a href="/admin/" class="{% if active=='overview' %}active{% endif %}">Overview</a>
+            <a href="/admin/keys" class="{% if active=='keys' %}active{% endif %}">Keys</a>
+            <a href="/admin/transcripts" class="{% if active=='transcripts' %}active{% endif %}">Transcripts</a>
+            <a href="/admin/settings" class="{% if active=='settings' %}active{% endif %}">Settings</a>
+        </nav>
+        <div class="sidebar-footer">
+            <a href="/admin/logout">Logout</a>
+        </div>
+    </aside>
+    <main class="main">
+        {% block content %}{% endblock %}
+    </main>
+</div>
+</body>
+</html>
