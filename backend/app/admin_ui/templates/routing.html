@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Routing{% endblock %}
+{% block content %}
+<h2>Model routing</h2>
+<p class="muted">Each request is classified and routed to the cheapest model that meets its tier.</p>
+
+{% if saved %}<div class="flash success">Saved.</div>{% endif %}
+
+<form method="post" action="/admin/routing" class="stack">
+    <label class="toggle">
+        <input type="checkbox" name="auto_route" value="1"
+               {% if auto_route %}checked{% endif %}>
+        Enable auto-routing (disable to always use the highest-tier model)
+    </label>
+    <label>Provider priority (comma-separated)
+        <input type="text" name="provider_order" value="{{ provider_order }}"
+               placeholder="groq,openrouter">
+    </label>
+    <button type="submit">Save</button>
+</form>
+
+<h3>Tier legend</h3>
+<div class="grid" style="margin-bottom:24px;">
+    <div class="card"><div class="label">Tier 1 — Fast</div>
+        <div class="value">$0.05–0.15 / M</div>
+        <p class="muted small">Classification, extraction, short factual</p></div>
+    <div class="card"><div class="label">Tier 2 — Balanced</div>
+        <div class="value">$0.15–0.60 / M</div>
+        <p class="muted small">General Q&A, light reasoning</p></div>
+    <div class="card"><div class="label">Tier 3 — Reasoning</div>
+        <div class="value">$0.80–4 / M</div>
+        <p class="muted small">Multi-step reasoning, analysis</p></div>
+    <div class="card"><div class="label">Tier 4 — Code</div>
+        <div class="value">$2–8 / M</div>
+        <p class="muted small">Coding, algorithms, debugging</p></div>
+    <div class="card"><div class="label">Tier 5 — Frontier</div>
+        <div class="value">$15–30 / M</div>
+        <p class="muted small">Hardest reasoning + code</p></div>
+</div>
+
+<h3>Model catalog</h3>
+{% for provider, models in registry.items() %}
+<h4 style="margin-top:24px;">{{ provider|capitalize }}</h4>
+<table class="table">
+<thead><tr>
+    <th>Model</th><th>Tier</th><th>Capabilities</th>
+    <th>In $/M</th><th>Out $/M</th><th>Speed</th><th>Best for</th>
+</tr></thead>
+<tbody>
+{% for mid, m in models.items() %}
+<tr>
+    <td><code>{{ mid }}</code></td>
+    <td><span class="badge">{{ m.tier }}</span></td>
+    <td class="muted small">{{ m.caps|join(', ') }}</td>
+    <td>{{ '%.3f'|format(m.input_per_mtok) }}</td>
+    <td>{{ '%.3f'|format(m.output_per_mtok) }}</td>
+    <td class="muted small">{{ m.speed_tok_s }} tok/s</td>
+    <td class="muted small">{{ m.best_for }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% endfor %}
+{% endblock %}
