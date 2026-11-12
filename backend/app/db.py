@@ -82,6 +82,24 @@ def init_db():
                 secret TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+
+            -- Provider usage tracking
+
+            CREATE TABLE IF NOT EXISTS provider_usage (
+                key_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                day TEXT NOT NULL,
+                requests INTEGER NOT NULL DEFAULT 0,
+                tokens_in INTEGER NOT NULL DEFAULT 0,
+                tokens_out INTEGER NOT NULL DEFAULT 0,
+                suspended INTEGER DEFAULT 0,
+                suspended_at TEXT,
+                PRIMARY KEY (key_id, day)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_provider_usage_day
+                ON provider_usage(day);
         """)
 
         # ---- Migrate activation_keys columns ----
@@ -608,3 +626,115 @@ def get_all_settings():
                 "SELECT key, value FROM settings"
             ).fetchall()
         }
+
+
+# ---- provider usage tracking ----
+
+def get_provider_usage(
+    key_id: str,
+    provider: str,
+    day: str | None = None,
+) -> dict | None:
+    """Return the usage row for a specific key and provider."""
+
+    d = day or _today()
+
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM provider_usage "
+            "WHERE key_id = ? AND provider = ? AND day = ?",
+            (key_id, provider, d),
+        ).fetchone()
+
+        return dict(row) if row else None
+
+
+def upsert_provider_usage(
+    key_id: str,
+    provider: str,
+    model_id: str,
+    add_requests: int = 1,
+    add_tokens_in: int = 0,
+    add_tokens_out: int = 0,
+):
+    """Increment provider usage counters for today."""
+
+    d = _today()
+
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO provider_usage "
+            "(key_id, provider, model_id, day, requests, tokens_in, tokens_out) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(key_id, day) DO UPDATE SET "
+            "requests = requests + excluded.requests, "
+            "tokens_in = tokens_in + excluded.tokens_in, "
+            "tokens_out = tokens_out + excluded.tokens_out, "
+            "provider = excluded.provider, "
+            "model_id = excluded.model_id",
+            (
+                key_id,
+                provider,
+                model_id,
+                d,
+                add_requests,
+                add_tokens_in,
+                add_tokens_out,
+            ),
+        )
+
+
+def suspend_key_for_today(key_id: str, provider: str):
+    """Mark a provider key as suspended for today."""
+
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO provider_usage "
+            "(key_id, provider, model_id, day, requests, tokens_in, tokens_out, "
+            "suspended, suspended_at) "
+            "VALUES (?, ?, '', ?, 0, 0, 0, 1, ?) "
+            "ON CONFLICT(key_id, day) DO UPDATE SET "
+            "suspended = 1, suspended_at = excluded.suspended_at",
+            (
+                key_id,
+                provider,
+                _today(),
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+
+
+def is_key_suspended(
+    key_id: str,
+    provider: str,
+    day: str | None = None,
+) -> bool:
+    """Check whether a provider key is suspended for the specified day."""
+
+    row = get_provider_usage(key_id, provider, day)
+    return bool(row and row.get("suspended"))
+
+
+def reset_all_suspensions_for_today():
+    """No action required: suspensions are scoped to individual days."""
+    pass
+
+
+def provider_usage_summary(day: str | None = None) -> list[dict]:
+    """Return provider usage rows for the admin dashboard."""
+
+    d = day or _today()
+
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT u.key_id, u.provider, u.model_id, u.requests, "
+            "u.tokens_in, u.tokens_out, u.suspended, u.suspended_at, "
+            "k.key_value, k.label, k.email "
+            "FROM provider_usage u "
+            "LEFT JOIN activation_keys k ON k.key_id = u.key_id "
+            "WHERE u.day = ? "
+            "ORDER BY u.provider, u.requests DESC",
+            (d,),
+        ).fetchall()
+
+        return [dict(r) for r in rows]

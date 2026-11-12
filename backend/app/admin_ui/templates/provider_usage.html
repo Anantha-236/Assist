@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block title %}Provider Usage{% endblock %}
+{% block content %}
+<h2>Free-tier usage &amp; limits</h2>
+<p class="muted">Each key is auto-suspended at 98% of its daily limit. Suspended keys are skipped until the next daily reset (UTC).</p>
+
+{% if saved %}<div class="flash success">Updated.</div>{% endif %}
+
+<h3>Per-provider summary</h3>
+<div class="grid" style="margin-bottom:24px;">
+{% for provider, a in aggregates.items() %}
+    <div class="card">
+        <div class="label">{{ provider|capitalize }}</div>
+        <div class="value">{{ a.active_keys }} / {{ a.keys }} active</div>
+        <p class="muted small">
+            {{ "{:,}".format(a.total_requests) }} requests ·
+            {{ "{:,}".format(a.total_tokens_in + a.total_tokens_out) }} tokens today
+        </p>
+        {% if a.suspended_keys > 0 %}
+            <p style="color:var(--red);font-size:12px;">
+                {{ a.suspended_keys }} key(s) suspended
+            </p>
+        {% endif %}
+    </div>
+{% else %}
+    <div class="card"><div class="muted">No keys yet — add one on the API Keys page.</div></div>
+{% endfor %}
+</div>
+
+<h3>Per-key breakdown</h3>
+<table class="table">
+<thead>
+<tr>
+    <th>Provider</th><th>Label</th><th>Key</th>
+    <th>Requests today</th><th>Tokens today</th>
+    <th>Status</th><th></th>
+</tr>
+</thead>
+<tbody>
+{% for r in rows %}
+<tr>
+    <td><span class="badge">{{ r.provider }}</span></td>
+    <td>{{ r.label }}</td>
+    <td><code>{{ r.key_masked }}</code></td>
+    <td>
+        {% if r.request_limit %}
+            {{ r.requests }} / {{ "{:,}".format(r.request_limit) }}
+            <div style="height:6px;background:var(--border);border-radius:3px;margin-top:4px;overflow:hidden;">
+                <div style="height:100%;
+                    width: {{ [r.request_pct, 100]|min if r.request_pct is not none else 0 }}%;
+                    background: {% if r.request_pct and r.request_pct >= 98 %}var(--red){% elif r.request_pct and r.request_pct >= 80 %}var(--amber){% else %}var(--green){% endif %};">
+                </div>
+            </div>
+            <span class="muted small">{{ r.request_pct or 0 }}%</span>
+        {% else %}
+            {{ r.requests }} <span class="muted small">(no daily cap)</span>
+        {% endif %}
+    </td>
+    <td>
+        {% set tok_total = r.tokens_in + r.tokens_out %}
+        {% if r.token_limit %}
+            {{ "{:,}".format(tok_total) }} / {{ "{:,}".format(r.token_limit) }}
+            <div style="height:6px;background:var(--border);border-radius:3px;margin-top:4px;overflow:hidden;">
+                <div style="height:100%;
+                    width: {{ [r.token_pct, 100]|min if r.token_pct is not none else 0 }}%;
+                    background: {% if r.token_pct and r.token_pct >= 98 %}var(--red){% elif r.token_pct and r.token_pct >= 80 %}var(--amber){% else %}var(--green){% endif %};">
+                </div>
+            </div>
+            <span class="muted small">{{ r.token_pct or 0 }}%</span>
+        {% else %}
+            {{ "{:,}".format(tok_total) }} <span class="muted small">(no daily cap)</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if r.suspended %}
+            <span class="badge red">SUSPENDED</span>
+            <div class="muted small">{{ r.suspended_at[:16] if r.suspended_at else '' }}</div>
+        {% elif r.active %}
+            <span class="badge green">active</span>
+        {% else %}
+            <span class="badge red">disabled</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if r.suspended %}
+            <form method="post" action="/admin/provider-usage/{{ r.id }}/unsuspend" style="display:inline;">
+                <button type="submit" style="padding:4px 10px;font-size:12px;">Unsuspend</button>
+            </form>
+        {% endif %}
+    </td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="muted">No usage tracked yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+
+<h3>Provider limits reference</h3>
+<table class="table">
+<thead><tr><th>Provider</th><th>Model</th><th>Daily requests</th><th>Daily tokens</th><th>RPM</th></tr></thead>
+<tbody>
+{% for provider, models in limits.items() %}
+    {% for model, lim in models.items() %}
+    <tr>
+        <td><span class="badge">{{ provider }}</span></td>
+        <td><code>{{ model }}</code></td>
+        <td>{{ "{:,}".format(lim.daily_requests) if lim.daily_requests else '—' }}</td>
+        <td>{{ "{:,}".format(lim.daily_tokens) if lim.daily_tokens else '—' }}</td>
+        <td>{{ lim.rpm or '—' }}</td>
+    </tr>
+    {% endfor %}
+{% endfor %}
+</tbody>
+</table>
+{% endblock %}

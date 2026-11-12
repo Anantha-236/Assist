@@ -1,5 +1,5 @@
 
-"""LLM streaming client — Groq primary, OpenRouter fallback."""
+"""LLM streaming client — Router-based Groq primary, OpenRouter fallback."""
 
 import json
 from typing import AsyncIterator
@@ -10,15 +10,12 @@ from . import quota
 from .config import (
     GROQ_API_KEY,
     GROQ_BASE_URL,
-    GROQ_MODEL_FALLBACK,
-    GROQ_MODEL_PRIMARY,
     LLM_PROVIDER,
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
-    OPENROUTER_MODELS_CHEAP,
-    OPENROUTER_MODELS_CODE,
-    OPENROUTER_MODELS_FAST,
 )
+from .usage_tracker import check_and_track
+
 
 SYSTEM_PROMPT_PROSE = (
     "You are a silent meeting assistant. Answer in first person as the user. "
@@ -40,76 +37,26 @@ SYSTEM_PROMPT_CODE = (
     "If you have no preference, default to Python."
 )
 
+
 # ---------------------------------------------------------------------------
-# Code detection — requires IMPERATIVE + NOUN (not just a keyword)
+# Helpers
 # ---------------------------------------------------------------------------
 
-_CODE_STRONG_PHRASES = (
-    "write a function", "write a program", "write code", "write me a",
-    "write the code", "write a script", "write a method",
-    "implement a", "implement the", "implement in",
-    "code for", "program to", "function to", "method to",
-    "solve this", "solve the", "leetcode", "hackerrank",
-    "generate code", "give me code", "show me code",
-    "code to", "algorithm to", "pseudo code", "pseudocode",
-)
-
-_CODE_IMPERATIVES = {
-    "write", "implement", "create", "build", "develop", "generate",
-    "design", "program", "solve", "compute", "calculate", "return",
-    "print", "define", "code",
-}
-
-_CODE_NOUNS = (
-    "function", "program", "algorithm", "code", "method", "class",
-    "script", "solution", "implementation", "snippet", "regex",
-    "pseudocode", "pseudo code", "query",
-)
-
-_CODE_ALGO_TERMS = (
-    "prime", "fibonacci", "factorial", "palindrome", "fizzbuzz",
-    "fizz buzz", "two sum", "linked list", "binary tree", "binary search",
-    "hash map", "hashmap", "sort array", "sort list", "reverse string",
-    "reverse array", "reverse linked list", "merge sort", "quick sort",
-    "bubble sort", "quicksort", "merge sort", "bfs", "dfs",
-    "greatest common divisor", " gcd", "lcm", "anagram",
-)
-
-_CODE_LANGS = (
-    "python", "javascript", "typescript", "java ", "java,", "c++",
-    "c#", "golang", "rust", "sql", "bash", "shell", "kotlin",
-)
+def _build_system_prompt(is_code: bool, profile: dict | None) -> str:
+    system = SYSTEM_PROMPT_CODE if is_code else SYSTEM_PROMPT_PROSE
+    profile_str = json.dumps(profile) if profile else "none"
+    return system + f"\nUser profile: {profile_str}"
 
 
-def _is_code_question(q: str) -> bool:
-    """Return True only if the question asks for code, not just mentions code terms."""
-    if not q:
-        return False
+def _fallback_key(provider: str) -> str | None:
+    """Get the provider API key from environment configuration."""
+    if provider == "groq":
+        return GROQ_API_KEY
 
-    ql = q.lower().strip()
+    if provider == "openrouter":
+        return OPENROUTER_API_KEY
 
-    if any(p in ql for p in _CODE_STRONG_PHRASES):
-        return True
-
-    words = set(ql.replace(",", " ").replace(".", " ").split())
-    has_imperative = bool(words & _CODE_IMPERATIVES)
-    has_noun = any(n in ql for n in _CODE_NOUNS)
-
-    if has_imperative and has_noun:
-        return True
-
-    if has_imperative and any(a in ql for a in _CODE_ALGO_TERMS):
-        return True
-
-    if has_imperative:
-        for verb in (
-            "reverse", "sort", "search", "check", "find", "count",
-            "compute", "calculate",
-        ):
-            if verb in words:
-                return True
-
-    return False
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -165,150 +112,409 @@ async def close_client():
 
 
 # ---------------------------------------------------------------------------
-# Groq
+# Groq — Router-based model selection + API key rotation
 # ---------------------------------------------------------------------------
 
-async def _stream_groq(
-    question: str, context: str, is_code: bool, profile: dict | None
+async def _rotate_groq(
+    question: str,
+    context: str,
+    is_code: bool,
+    profile: dict | None,
+    classification: dict | None = None,
 ) -> AsyncIterator[tuple[str, str]]:
 
-    system = SYSTEM_PROMPT_CODE if is_code else SYSTEM_PROMPT_PROSE
-    profile_str = json.dumps(profile) if profile else "none"
+    from . import db, router
+
+    # Classify if not provided.
+    if classification is None:
+        from .classifier import classify
+        classification = classify(question)
+
+    # Select the cheapest Groq model meeting the required tier.
+    chosen = router.select_model(
+        classification,
+        force_provider="groq",
+    )
+
+    if not chosen:
+        yield ("error", "no Groq model available for this tier")
+        return
+
+    model_id = chosen["model_id"]
+
+    print(
+        f"[llm] groq → {model_id} ({chosen['reason']})"
+    )
+
+    # Load active API keys.
+    keys = db.get_active_keys("groq")
+
+    if not keys:
+        env_key = _fallback_key("groq")
+
+        if env_key:
+            keys = [
+                {
+                    "id": None,
+                    "key_value": env_key,
+                    "label": ".env",
+                }
+            ]
+        else:
+            yield ("error", "no Groq API keys configured")
+            return
+
+    system = _build_system_prompt(is_code, profile)
 
     messages = [
         {"role": "system", "content": "/no_think"},
-        {"role": "system", "content": system + f"\nUser profile: {profile_str}"},
-        {"role": "user", "content": f"Context:\n{context}\n\nQ: {question}"},
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": f"Conversation:\n{context}\n\nQuestion: {question}",
+        },
     ]
 
-    model = GROQ_MODEL_PRIMARY
-
     payload = {
-        "model": model,
+        "model": model_id,
         "messages": messages,
-        "max_tokens": 1200 if is_code else 300,
-        "temperature": 0.2,
+        "max_tokens": 1200 if is_code else 350,
+        "temperature": 0.3,
         "stream": True,
     }
 
     client = _get_groq()
 
-    try:
-        async with client.stream(
-            "POST", "/chat/completions", json=payload
-        ) as resp:
+    for k in keys:
+        key_id = k["id"]
+        key_val = k["key_value"]
+        label = k.get("label") or (
+            key_id[:8] if key_id else "env"
+        )
 
-            if resp.status_code != 200:
-                body = await resp.aread()
+        # Skip keys suspended for today.
+        if key_id and db.is_key_suspended(key_id, "groq"):
+            print(
+                f"[llm] groq key {label} → "
+                "suspended today, skipping"
+            )
+            continue
 
-                print(
-                    f"[llm] groq {model} HTTP "
-                    f"{resp.status_code}: {body[:120]!r}"
-                )
+        try:
+            async with client.stream(
+                "POST",
+                "/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key_val}"
+                },
+                json=payload,
+            ) as resp:
 
-                if GROQ_MODEL_FALLBACK and GROQ_MODEL_FALLBACK != model:
-                    payload["model"] = GROQ_MODEL_FALLBACK
-
+                if (
+                    resp.status_code in (401, 403, 429)
+                    or resp.status_code >= 500
+                ):
                     print(
-                        f"[llm] groq fallback → {GROQ_MODEL_FALLBACK}"
+                        f"[llm] groq key {label} → "
+                        f"HTTP {resp.status_code}, trying next"
                     )
 
-                    async with client.stream(
-                        "POST", "/chat/completions", json=payload
-                    ) as r2:
+                    if key_id:
+                        db.mark_key_failure(key_id)
 
-                        if r2.status_code != 200:
-                            b2 = await r2.aread()
+                    continue
+
+                if resp.status_code != 200:
+                    body = await resp.aread()
+
+                    print(
+                        f"[llm] groq key {label} → "
+                        f"HTTP {resp.status_code}: {body[:120]!r}"
+                    )
+
+                    if key_id:
+                        db.mark_key_failure(key_id)
+
+                    continue
+
+                if key_id:
+                    db.mark_key_success(key_id)
+
+                async for kind, data in _parse_sse(resp):
+
+                    if kind == "usage":
+                        try:
+                            usage = json.loads(data)
+
+                            # Track provider usage against free-tier limits.
+                            check_and_track(
+                                key_id=key_id,
+                                provider="groq",
+                                model_id=model_id,
+                                tokens_in=int(
+                                    usage.get("prompt_tokens", 0) or 0
+                                ),
+                                tokens_out=int(
+                                    usage.get("completion_tokens", 0) or 0
+                                ),
+                            )
 
                             yield (
-                                "error",
-                                f"groq fallback HTTP "
-                                f"{r2.status_code}: {b2[:160]!r}",
+                                "usage_meta",
+                                json.dumps({
+                                    "api_key_id": key_id,
+                                    "provider": "groq",
+                                    "model": model_id,
+                                    "usage": usage,
+                                    "classification": classification,
+                                }),
                             )
-                            return
 
-                        async for kind, data in _parse_sse(r2):
-                            yield (kind, data)
+                        except Exception as e:
+                            print(
+                                f"[llm] groq usage tracking error: "
+                                f"{type(e).__name__}: {e}"
+                            )
 
-                    return
+                    yield (kind, data)
 
-                yield (
-                    "error",
-                    f"groq HTTP {resp.status_code}: {body[:160]!r}",
-                )
                 return
 
-            async for kind, data in _parse_sse(resp):
-                yield (kind, data)
+        except httpx.ReadTimeout:
+            print(
+                f"[llm] groq key {label} → "
+                "read timeout, trying next"
+            )
 
-    except httpx.ReadTimeout:
-        print("[llm] groq READ TIMEOUT — no data in 15s")
-        yield ("error", "model stalled on Groq")
+            if key_id:
+                db.mark_key_failure(key_id)
 
-    except Exception as e:
-        print(f"[llm] groq EXCEPTION {type(e).__name__}: {e}")
-        yield ("error", f"{type(e).__name__}")
+            continue
+
+        except Exception as e:
+            print(
+                f"[llm] groq key {label} → "
+                f"exception {type(e).__name__}: {e}"
+            )
+
+            if key_id:
+                db.mark_key_failure(key_id)
+
+            continue
+
+    yield ("error", "all Groq keys failed")
 
 
 # ---------------------------------------------------------------------------
-# OpenRouter
+# OpenRouter — Router-based model selection + API key rotation
 # ---------------------------------------------------------------------------
 
-async def _stream_openrouter(
-    question: str, context: str, is_code: bool, profile: dict | None
+async def _rotate_openrouter(
+    question: str,
+    context: str,
+    is_code: bool,
+    profile: dict | None,
+    classification: dict | None = None,
 ) -> AsyncIterator[tuple[str, str]]:
 
-    st = quota.status()
+    from . import db, router
 
-    models = (
-        OPENROUTER_MODELS_CHEAP
-        if st.get("low")
-        else OPENROUTER_MODELS_FAST
+    # Classify if not provided.
+    if classification is None:
+        from .classifier import classify
+        classification = classify(question)
+
+    chosen = router.select_model(
+        classification,
+        force_provider="openrouter",
     )
 
-    if is_code and OPENROUTER_MODELS_CODE:
-        models = OPENROUTER_MODELS_CODE
-
-    if not models:
-        yield ("error", "no OpenRouter models configured")
+    if not chosen:
+        yield (
+            "error",
+            "no OpenRouter model available for this tier",
+        )
         return
 
-    system = SYSTEM_PROMPT_CODE if is_code else SYSTEM_PROMPT_PROSE
-    profile_str = json.dumps(profile) if profile else "none"
+    model_id = chosen["model_id"]
+
+    print(
+        f"[llm] openrouter → {model_id} ({chosen['reason']})"
+    )
+
+    # Load active API keys.
+    keys = db.get_active_keys("openrouter")
+
+    if not keys:
+        env_key = _fallback_key("openrouter")
+
+        if env_key:
+            keys = [
+                {
+                    "id": None,
+                    "key_value": env_key,
+                    "label": ".env",
+                }
+            ]
+        else:
+            yield (
+                "error",
+                "no OpenRouter API keys configured",
+            )
+            return
+
+    system = _build_system_prompt(is_code, profile)
 
     messages = [
         {"role": "system", "content": "/no_think"},
-        {"role": "system", "content": system + f"\nUser profile: {profile_str}"},
-        {"role": "user", "content": f"Context:\n{context}\n\nQ: {question}"},
+        {"role": "system", "content": system},
+        {
+            "role": "user",
+            "content": f"Conversation:\n{context}\n\nQuestion: {question}",
+        },
     ]
 
     payload = {
-        "models": models,
+        "model": model_id,
         "messages": messages,
-        "max_tokens": 1200 if is_code else 300,
-        "temperature": 0.2,
+        "max_tokens": 1200 if is_code else 350,
+        "temperature": 0.3,
         "stream": True,
-        "provider": {"sort": "latency", "preferred_max_latency": 2},
     }
 
     client = _get_openrouter()
 
-    async with client.stream(
-        "POST", "/chat/completions", json=payload
-    ) as resp:
+    for k in keys:
+        key_id = k["id"]
+        key_val = k["key_value"]
+        label = k.get("label") or (
+            key_id[:8] if key_id else "env"
+        )
 
-        if resp.status_code == 429:
-            quota.note_rate_limit()
-            yield ("error", "rate limited (429)")
-            return
+        # Skip keys suspended for today.
+        if key_id and db.is_key_suspended(key_id, "openrouter"):
+            print(
+                f"[llm] OR key {label} → "
+                "suspended today, skipping"
+            )
+            continue
 
-        if resp.status_code != 200:
-            body = await resp.aread()
-            yield ("error", f"HTTP {resp.status_code}: {body[:160]!r}")
-            return
+        try:
+            async with client.stream(
+                "POST",
+                "/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {key_val}"
+                },
+                json=payload,
+            ) as resp:
 
-        async for kind, data in _parse_sse(resp):
-            yield (kind, data)
+                if resp.status_code == 429:
+                    quota.note_rate_limit()
+
+                    print(
+                        f"[llm] OR key {label} → "
+                        "429, trying next"
+                    )
+
+                    if key_id:
+                        db.mark_key_failure(key_id)
+
+                    continue
+
+                if (
+                    resp.status_code in (401, 403)
+                    or resp.status_code >= 500
+                ):
+                    print(
+                        f"[llm] OR key {label} → "
+                        f"HTTP {resp.status_code}, trying next"
+                    )
+
+                    if key_id:
+                        db.mark_key_failure(key_id)
+
+                    continue
+
+                if resp.status_code != 200:
+                    body = await resp.aread()
+
+                    print(
+                        f"[llm] OR key {label} → "
+                        f"HTTP {resp.status_code}: {body[:120]!r}"
+                    )
+
+                    if key_id:
+                        db.mark_key_failure(key_id)
+
+                    continue
+
+                if key_id:
+                    db.mark_key_success(key_id)
+
+                async for kind, data in _parse_sse(resp):
+
+                    if kind == "usage":
+                        try:
+                            usage = json.loads(data)
+
+                            # Track provider usage against free-tier limits.
+                            check_and_track(
+                                key_id=key_id,
+                                provider="openrouter",
+                                model_id=model_id,
+                                tokens_in=int(
+                                    usage.get("prompt_tokens", 0) or 0
+                                ),
+                                tokens_out=int(
+                                    usage.get("completion_tokens", 0) or 0
+                                ),
+                            )
+
+                            yield (
+                                "usage_meta",
+                                json.dumps({
+                                    "api_key_id": key_id,
+                                    "provider": "openrouter",
+                                    "model": model_id,
+                                    "usage": usage,
+                                    "classification": classification,
+                                }),
+                            )
+
+                        except Exception as e:
+                            print(
+                                f"[llm] OpenRouter usage tracking error: "
+                                f"{type(e).__name__}: {e}"
+                            )
+
+                    yield (kind, data)
+
+                return
+
+        except httpx.ReadTimeout:
+            print(
+                f"[llm] OR key {label} → "
+                "read timeout, trying next"
+            )
+
+            if key_id:
+                db.mark_key_failure(key_id)
+
+            continue
+
+        except Exception as e:
+            print(
+                f"[llm] OR key {label} → "
+                f"exception {type(e).__name__}: {e}"
+            )
+
+            if key_id:
+                db.mark_key_failure(key_id)
+
+            continue
+
+    yield ("error", "all OpenRouter keys failed")
 
 
 # ---------------------------------------------------------------------------
@@ -368,30 +574,37 @@ async def _parse_sse(
 
 
 # ---------------------------------------------------------------------------
-# Public entry
+# Public entry — classify once and pass classification to router
 # ---------------------------------------------------------------------------
 
 async def stream_answer(
-    question: str, context: str, profile: dict | None
+    question: str,
+    context: str,
+    profile: dict | None,
 ) -> AsyncIterator[tuple[str, str]]:
-    """Yields ('delta', text) | ('usage', json) | ('done', '') | ('error', msg)."""
+    """Stream model output using router-based model selection."""
 
-    is_code = _is_code_question(question)
+    from .classifier import classify
 
-    if is_code:
-        print(f"[llm] CODE mode: {question[:80]!r}")
-    else:
-        print(f"[llm] PROSE mode: {question[:80]!r}")
+    classification = classify(question)
 
-    if (
-        LLM_PROVIDER == "groq"
-        and GROQ_API_KEY
-        and GROQ_API_KEY.startswith("gsk_")
-    ):
-        last_kind = None
+    is_code = classification["intent"] == "code"
 
-        async for kind, data in _stream_groq(
-            question, context, is_code, profile
+    print(
+        f"[llm] {classification['reason']} "
+        f"→ tier {classification['required_tier']}"
+    )
+
+    last_kind = None
+
+    if LLM_PROVIDER == "groq":
+
+        async for kind, data in _rotate_groq(
+            question,
+            context,
+            is_code,
+            profile,
+            classification,
         ):
             last_kind = kind
             yield (kind, data)
@@ -399,17 +612,27 @@ async def stream_answer(
             if kind == "done":
                 return
 
-        if last_kind == "error" and OPENROUTER_API_KEY:
-            print("[llm] groq failed, falling back to OpenRouter")
+        if last_kind == "error":
+            print(
+                "[llm] groq exhausted, falling back to OpenRouter"
+            )
 
-            async for kind, data in _stream_openrouter(
-                question, context, is_code, profile
+            async for kind, data in _rotate_openrouter(
+                question,
+                context,
+                is_code,
+                profile,
+                classification,
             ):
                 yield (kind, data)
 
         return
 
-    async for kind, data in _stream_openrouter(
-        question, context, is_code, profile
+    async for kind, data in _rotate_openrouter(
+        question,
+        context,
+        is_code,
+        profile,
+        classification,
     ):
         yield (kind, data)

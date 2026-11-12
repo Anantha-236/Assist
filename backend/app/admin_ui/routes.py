@@ -1,5 +1,6 @@
-﻿
-"""Admin dashboard: TOTP login, overview, keys, transcripts, settings, and TOTP."""
+﻿"""Admin dashboard: TOTP login, overview, keys, transcripts, settings,
+routing, TOTP, and provider usage.
+"""
 
 from pathlib import Path
 import base64
@@ -16,6 +17,9 @@ from fastapi.templating import Jinja2Templates
 from .. import auth, db, quota
 from ..config import ADMIN_EMAILS, ADMIN_PASSWORD, DAILY_QUESTION_LIMIT
 from ..email_service import send_activation_key_email
+from ..models import MODEL_REGISTRY, TIER_FAST, TIER_FRONTIER
+from ..usage_tracker import key_status_for_dashboard
+from ..provider_limits import PROVIDER_LIMITS
 
 
 router = APIRouter(prefix="/admin", tags=["admin-ui"])
@@ -44,11 +48,16 @@ def _render(request: Request, name: str, **kw):
     )
 
 
-# ---------------- auth (TOTP) ----------------
+# ---------------- AUTH (TOTP) ----------------
 
 @router.get("/login", response_class=HTMLResponse)
 def login_form(request: Request, error: str = ""):
-    return _render(request, "login.html", error=error, active="login")
+    return _render(
+        request,
+        "login.html",
+        error=error,
+        active="login",
+    )
 
 
 @router.post("/login/start")
@@ -201,14 +210,7 @@ def logout(request: Request):
     return RedirectResponse("/admin/login", status_code=303)
 
 
-# ---------------- TOTP reset (admin password) ----------------
-# If you lose your authenticator, POST here with your admin password.
-#
-# Test with:
-# curl -X POST https://.../admin/api/reset-totp \
-#      -H "X-Admin-Password: <your password>" \
-#      -d "email=your-admin-email@example.com"
-
+# ---------------- TOTP RESET (ADMIN PASSWORD) ----------------
 
 @router.post("/api/reset-totp")
 def reset_totp_api(
@@ -220,7 +222,10 @@ def reset_totp_api(
 
     db.clear_totp_secret(email.strip().lower())
 
-    return {"ok": True, "reset": email}
+    return {
+        "ok": True,
+        "reset": email,
+    }
 
 
 # ---------------- OVERVIEW ----------------
@@ -385,6 +390,116 @@ def set_limit_form(
     )
 
 
+# ---------------- PROVIDER USAGE ----------------
+
+@router.get("/provider-usage", response_class=HTMLResponse)
+def provider_usage_page(
+    request: Request,
+    saved: str = "",
+):
+    """
+    Display provider API-key usage, limits, and suspension status.
+    """
+
+    keys = db.list_api_keys()
+    rows = []
+
+    for k in keys:
+        status = key_status_for_dashboard(
+            k["id"],
+            k["provider"],
+        )
+
+        key_value = k.get("key_value") or ""
+
+        if len(key_value) > 14:
+            key_masked = f"{key_value[:10]}…{key_value[-4:]}"
+        elif key_value:
+            key_masked = f"{key_value[:3]}…"
+        else:
+            key_masked = "—"
+
+        rows.append(
+            {
+                "id": k["id"],
+                "provider": k["provider"],
+                "label": k.get("label") or "—",
+                "key_masked": key_masked,
+                "active": bool(k["active"]),
+                **status,
+            }
+        )
+
+    # Aggregate usage per provider.
+    aggregates = {}
+
+    for row in rows:
+        provider = row["provider"]
+
+        aggregates.setdefault(
+            provider,
+            {
+                "keys": 0,
+                "active_keys": 0,
+                "suspended_keys": 0,
+                "total_requests": 0,
+                "total_tokens_in": 0,
+                "total_tokens_out": 0,
+            },
+        )
+
+        aggregate = aggregates[provider]
+
+        aggregate["keys"] += 1
+        aggregate["active_keys"] += int(row["active"])
+        aggregate["suspended_keys"] += int(
+            bool(row.get("suspended", False))
+        )
+        aggregate["total_requests"] += int(
+            row.get("requests", 0) or 0
+        )
+        aggregate["total_tokens_in"] += int(
+            row.get("tokens_in", 0) or 0
+        )
+        aggregate["total_tokens_out"] += int(
+            row.get("tokens_out", 0) or 0
+        )
+
+    return _render(
+        request,
+        "provider_usage.html",
+        active="provider_usage",
+        rows=rows,
+        aggregates=aggregates,
+        saved=bool(saved),
+        limits=PROVIDER_LIMITS,
+    )
+
+
+@router.post("/provider-usage/{key_id}/unsuspend")
+def unsuspend_key(key_id: str):
+    """
+    Manually clear today's suspension for one provider API key.
+    """
+
+    with db._conn() as connection:
+        connection.execute(
+            """
+            UPDATE provider_usage
+            SET suspended = 0,
+                suspended_at = NULL
+            WHERE key_id = ?
+              AND day = ?
+            """,
+            (key_id, db._today()),
+        )
+
+    return RedirectResponse(
+        "/admin/provider-usage?saved=1",
+        status_code=303,
+    )
+
+
 # ---------------- TRANSCRIPTS ----------------
 
 @router.get("/transcripts", response_class=HTMLResponse)
@@ -405,9 +520,9 @@ def transcript_detail(
     request: Request,
     transcript_id: str,
 ):
-    t = db.get_transcript(transcript_id)
+    transcript = db.get_transcript(transcript_id)
 
-    if t is None:
+    if transcript is None:
         return RedirectResponse(
             "/admin/transcripts",
             status_code=303,
@@ -417,7 +532,7 @@ def transcript_detail(
         request,
         "transcript_detail.html",
         active="transcripts",
-        t=t,
+        t=transcript,
     )
 
 
@@ -460,6 +575,48 @@ def settings_save(
     )
 
 
+# ---------------- MODEL ROUTING ----------------
+
+@router.get("/routing", response_class=HTMLResponse)
+def routing_page(request: Request, saved: str = ""):
+    return _render(
+        request,
+        "routing.html",
+        active="routing",
+        registry=MODEL_REGISTRY,
+        provider_order=db.get_setting(
+            "router_provider_order",
+            "groq,openrouter",
+        ),
+        auto_route=db.get_setting(
+            "auto_route_enabled",
+            "1",
+        ) == "1",
+        saved=bool(saved),
+    )
+
+
+@router.post("/routing")
+def routing_save(
+    provider_order: str = Form("groq,openrouter"),
+    auto_route: str = Form("0"),
+):
+    db.set_setting(
+        "router_provider_order",
+        provider_order,
+    )
+
+    db.set_setting(
+        "auto_route_enabled",
+        "1" if auto_route == "1" else "0",
+    )
+
+    return RedirectResponse(
+        "/admin/routing?saved=1",
+        status_code=303,
+    )
+
+
 # ---------------- OPENROUTER API TEST ----------------
 
 @router.post("/api-test")
@@ -473,8 +630,8 @@ async def admin_api_test(request: Request):
     )
 
     if not OPENROUTER_API_KEY or any(
-        tok in OPENROUTER_API_KEY
-        for tok in ("REPLACE", "DEMO", "xxxx")
+        token in OPENROUTER_API_KEY
+        for token in ("REPLACE", "DEMO", "xxxx")
     ):
         return {
             "ok": False,
