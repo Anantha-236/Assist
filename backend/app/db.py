@@ -41,7 +41,8 @@ def init_db():
                 company TEXT, target_role TEXT, target_company TEXT,
                 industry TEXT, achievements TEXT, projects TEXT,
                 target_salary TEXT, notice_period TEXT, answer_style TEXT,
-                features_json TEXT
+                features_json TEXT,
+                telegram_chat_id TEXT
             );
             CREATE TABLE IF NOT EXISTS usage (
                 key_id TEXT NOT NULL,
@@ -135,6 +136,14 @@ def init_db():
             );
             CREATE INDEX IF NOT EXISTS idx_answers_key
                 ON interview_answers(key_id, created_at DESC);
+            CREATE TABLE IF NOT EXISTS invites (
+                token TEXT PRIMARY KEY,
+                email TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used INTEGER DEFAULT 0,
+                chat_id TEXT
+            );
         """)
 
         # migration: activation_keys
@@ -156,6 +165,7 @@ def init_db():
             ("notice_period", "TEXT", "NULL"),
             ("answer_style", "TEXT", "NULL"),
             ("features_json", "TEXT", "NULL"),
+            ("telegram_chat_id", "TEXT", "NULL"),
         ]:
             if col not in cols:
                 c.execute(f"ALTER TABLE activation_keys ADD COLUMN {col} {typ} DEFAULT {default}")
@@ -172,7 +182,7 @@ def init_db():
             c.execute("ALTER TABLE transcripts ADD COLUMN session_id TEXT")
             c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_transcripts_session ON transcripts(session_id)")
 
-        # migration: provider_usage (live Groq headers)
+        # migration: provider_usage
         pcols = {r["name"] for r in c.execute("PRAGMA table_info(provider_usage)")}
         for col, typ in [
             ("remaining_requests", "INTEGER"), ("remaining_tokens", "INTEGER"),
@@ -279,6 +289,28 @@ def get_key_email(key_id):
     return row["email"] if row and "email" in row.keys() else None
 
 
+def set_key_telegram_chat_id(key_id, chat_id):
+    with _conn() as c:
+        c.execute("UPDATE activation_keys SET telegram_chat_id = ? WHERE key_id = ?",
+                  (str(chat_id), key_id))
+
+
+def get_key_telegram_chat_id(key_id):
+    row = get_key_by_id(key_id)
+    return row["telegram_chat_id"] if row and "telegram_chat_id" in row.keys() else None
+
+
+def find_chat_id_by_email(email):
+    """Look up Telegram chat_id for any key with this email."""
+    with _conn() as c:
+        row = c.execute(
+            "SELECT telegram_chat_id FROM activation_keys "
+            "WHERE email = ? AND telegram_chat_id IS NOT NULL "
+            "ORDER BY created_at DESC LIMIT 1",
+            (email.strip().lower(),)).fetchone()
+        return row["telegram_chat_id"] if row else None
+
+
 def list_keys():
     with _conn() as c:
         return [dict(r) for r in c.execute(
@@ -288,6 +320,32 @@ def list_keys():
 def count_keys():
     with _conn() as c:
         return c.execute("SELECT COUNT(*) FROM activation_keys").fetchone()[0]
+
+
+# ===== invites (Telegram onboarding) =====
+def create_invite_row(token, email, ttl_hours=72):
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO invites (token, email, created_at, expires_at) "
+            "VALUES (?, ?, ?, ?)",
+            (token, email, datetime.now(timezone.utc).isoformat(),
+             (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()))
+
+
+def get_invite_row(token):
+    with _conn() as c:
+        row = c.execute("SELECT * FROM invites WHERE token = ?", (token,)).fetchone()
+        return dict(row) if row else None
+
+
+def update_invite_chat_id(token, chat_id):
+    with _conn() as c:
+        c.execute("UPDATE invites SET chat_id = ? WHERE token = ?", (str(chat_id), token))
+
+
+def mark_invite_used(token):
+    with _conn() as c:
+        c.execute("UPDATE invites SET used = 1 WHERE token = ?", (token,))
 
 
 # ===== features =====
@@ -533,7 +591,7 @@ def get_all_settings():
         return {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM settings")}
 
 
-# ===== admin OTP (legacy, kept for migration) =====
+# ===== admin OTP (legacy) =====
 def create_admin_otp(email, ttl_minutes=10):
     otp = str(secrets.randbelow(900_000) + 100_000)
     h = hashlib.sha256(otp.encode()).hexdigest()
@@ -643,7 +701,7 @@ def mark_key_failure(key_id):
                   (key_id,))
 
 
-# ===== provider usage (with live headers) =====
+# ===== provider usage =====
 def get_provider_usage(key_id, provider, day=None):
     d = day or _today()
     with _conn() as c:
@@ -668,7 +726,6 @@ def upsert_provider_usage(key_id, provider, model_id,
 
 
 def update_live_quota(key_id, provider, headers):
-    """Store latest Groq rate-limit headers for this key."""
     if not key_id:
         return
     try:

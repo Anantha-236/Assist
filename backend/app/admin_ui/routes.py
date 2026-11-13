@@ -1,8 +1,9 @@
-﻿"""Admin dashboard: TOTP login, keys, features, usage, routing, onboarding."""
+﻿"""Admin dashboard: TOTP login, keys, features, usage, routing, invites."""
 
 import base64
 import io
 import os
+import urllib.parse
 from pathlib import Path
 
 import pyotp
@@ -16,21 +17,21 @@ from ..config import ADMIN_EMAILS, ADMIN_PASSWORD, DAILY_QUESTION_LIMIT
 from ..features import DEFAULT_FEATURES, FEATURE_LABELS
 from ..models import MODEL_REGISTRY
 from ..provider_limits import PROVIDER_LIMITS
+from ..telegram_service import send_activation_key
 from ..usage_tracker import key_status_for_dashboard
 
 router = APIRouter(prefix="/admin", tags=["admin-ui"])
-
 TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
-def _ctx(request: Request, **kw):
+def _ctx(request, **kw):
     base = {"request": request, "admin": True, "active": ""}
     base.update(kw)
     return base
 
 
-def _render(request: Request, name: str, **kw):
+def _render(request, name, **kw):
     return templates.TemplateResponse(
         request=request, name=name, context=_ctx(request, **kw))
 
@@ -105,8 +106,8 @@ def login_verify_totp(request: Request, email: str = Form(...), code: str = Form
         request.session["admin"] = True
         request.session["admin_email"] = e
         return RedirectResponse("/admin/", status_code=303)
-    return RedirectResponse(
-        f"/admin/login/verify-totp?email={e}&error=Invalid+code", status_code=303)
+    return RedirectResponse(f"/admin/login/verify-totp?email={e}&error=Invalid+code",
+                            status_code=303)
 
 
 @router.get("/logout")
@@ -116,11 +117,8 @@ def logout(request: Request):
 
 
 @router.post("/api/reset-totp")
-def reset_totp_api(
-    request: Request,
-    email: str = Form(...),
-    x_admin_password: str = Header(None),
-):
+def reset_totp_api(request: Request, email: str = Form(...),
+                   x_admin_password: str = Header(None)):
     if x_admin_password != ADMIN_PASSWORD:
         raise HTTPException(401, "admin password required")
     db.clear_totp_secret(email.strip().lower())
@@ -143,55 +141,60 @@ def overview(request: Request):
 
 # ===== keys =====
 @router.get("/keys", response_class=HTMLResponse)
-def keys_list(request: Request, invited: str = ""):
+def keys_list(request: Request, invited: str = "", error: str = "",
+              telegram_link: str = ""):
     keys = db.list_keys()
     for k in keys:
         k["usage_today"] = db.get_today_usage(k["key_id"])
         k["usage_total"] = db.get_total_usage_for_key(k["key_id"])
     return _render(request, "keys.html", active="keys", keys=keys,
-                   daily_limit=DAILY_QUESTION_LIMIT, invited=bool(invited))
-
-
-@router.post("/keys")
-async def create_key(
-    request: Request,
-    label: str = Form(""),
-    send_to_email: str = Form(""),
-):
-    key_id, key_value = auth.generate_key()
-    db.insert_key(key_id, key_value, label=label or None)
-    if send_to_email.strip():
-        try:
-            from ..email_service import send_activation_key_email
-            await send_activation_key_email(send_to_email.strip(), key_value, label or None)
-        except Exception as e:
-            print(f"[admin] key email failed: {e}")
-    return RedirectResponse(f"/admin/keys/{key_id}?created=1", status_code=303)
+                   daily_limit=DAILY_QUESTION_LIMIT,
+                   invited=bool(invited), error=error,
+                   telegram_link=telegram_link or None)
 
 
 @router.post("/keys/invite")
 async def keys_invite(request: Request, email: str = Form(...)):
     from ..routers.onboarding import create_invite
-    from ..email_service import _send
     token = create_invite(email.strip().lower())
-    base = os.environ.get("ASSIST_PUBLIC_URL", "http://127.0.0.1:8000")
-    link = f"{base}/onboard/{token}"
-    html = (
-        f"<p>You're invited to Assist.</p>"
-        f"<p><a href='{link}' style='background:#6366f1;color:#fff;"
-        f"padding:10px 20px;border-radius:6px;text-decoration:none;"
-        f"display:inline-block;'>Complete your profile</a></p>"
-        f"<p style='color:#888;'>This link expires in 72 hours. "
-        f"You'll receive your activation key by email after completing the form.</p>"
-    )
-    await _send(email, "You're invited to Assist", html)
-    return RedirectResponse("/admin/keys?invited=1", status_code=303)
+    bot = os.environ.get("TELEGRAM_BOT_USERNAME", "YourBotUsername").lstrip("@")
+    link = f"https://t.me/{bot}?start={token}"
+    print(f"[admin] invite link for {email}: {link}")
+    return RedirectResponse(
+        f"/admin/keys?invited=1&telegram_link={urllib.parse.quote(link)}",
+        status_code=303)
+
+
+@router.post("/keys")
+async def create_key(request: Request, label: str = Form(""),
+                     send_to_email: str = Form("")):
+    key_id, key_value = auth.generate_key()
+    db.insert_key(key_id, key_value, label=label or None)
+
+    if send_to_email.strip():
+        email = send_to_email.strip().lower()
+        chat_id = db.find_chat_id_by_email(email)
+        if chat_id:
+            ok, err = await send_activation_key(chat_id, key_value, label or None)
+            if not ok:
+                return RedirectResponse(
+                    f"/admin/keys/{key_id}?created=1&tg_error="
+                    f"{urllib.parse.quote(err)}", status_code=303)
+            # Save chat_id + email on the new key for future transcripts
+            db.set_key_email(key_id, email)
+            db.set_key_telegram_chat_id(key_id, chat_id)
+        else:
+            return RedirectResponse(
+                f"/admin/keys/{key_id}?created=1&tg_error="
+                f"{urllib.parse.quote('User not linked to Telegram yet — use Send onboarding link instead.')}",
+                status_code=303)
+
+    return RedirectResponse(f"/admin/keys/{key_id}?created=1", status_code=303)
 
 
 @router.get("/keys/{key_id}", response_class=HTMLResponse)
-def key_detail(
-    request: Request, key_id: str, created: str = "", saved: str = ""
-):
+def key_detail(request: Request, key_id: str, created: str = "",
+               saved: str = "", tg_error: str = ""):
     row = db.get_key_by_id(key_id)
     if row is None:
         return RedirectResponse("/admin/keys", status_code=303)
@@ -205,6 +208,7 @@ def key_detail(
                    transcripts=db.list_transcripts_for_key(key_id, 20),
                    daily_limit=db.get_key_daily_limit(key_id, DAILY_QUESTION_LIMIT),
                    just_created=bool(created), just_saved=bool(saved),
+                   tg_error=tg_error or None,
                    features=db.get_features(key_id))
 
 
@@ -216,21 +220,13 @@ def revoke_key_form(request: Request, key_id: str):
 
 @router.post("/keys/{key_id}/profile")
 def set_profile_form(
-    request: Request,
-    key_id: str,
-    role: str = Form(""),
-    experience: str = Form(""),
-    skills: str = Form(""),
-    company: str = Form(""),
-    target_role: str = Form(""),
-    target_company: str = Form(""),
-    industry: str = Form(""),
-    achievements: str = Form(""),
-    projects: str = Form(""),
-    target_salary: str = Form(""),
-    notice_period: str = Form(""),
-    answer_style: str = Form(""),
-    email: str = Form(""),
+    request: Request, key_id: str,
+    role: str = Form(""), experience: str = Form(""), skills: str = Form(""),
+    company: str = Form(""), target_role: str = Form(""),
+    target_company: str = Form(""), industry: str = Form(""),
+    achievements: str = Form(""), projects: str = Form(""),
+    target_salary: str = Form(""), notice_period: str = Form(""),
+    answer_style: str = Form(""), email: str = Form(""),
 ):
     profile = {"role": role, "experience": experience, "skills": skills,
                "company": company, "target_role": target_role,
@@ -252,10 +248,8 @@ def set_profile_form(
 
 
 @router.post("/keys/{key_id}/limit")
-def set_limit_form(
-    request: Request, key_id: str,
-    tier: str = Form("free"), daily_limit: int = Form(200),
-):
+def set_limit_form(request: Request, key_id: str,
+                   tier: str = Form("free"), daily_limit: int = Form(200)):
     daily_limit = max(1, min(daily_limit, 100_000))
     db.set_key_limit(key_id, tier, daily_limit)
     return RedirectResponse(f"/admin/keys/{key_id}?saved=1", status_code=303)
@@ -273,9 +267,8 @@ def features_form(request: Request, key_id: str):
 
 
 @router.post("/keys/{key_id}/features")
-async def features_save(
-    request: Request, key_id: str, grant_basic: str = Form("0")
-):
+async def features_save(request: Request, key_id: str,
+                        grant_basic: str = Form("0")):
     form = await request.form()
     if grant_basic == "1":
         features = dict(DEFAULT_FEATURES)
@@ -294,13 +287,9 @@ def api_keys_page(request: Request, saved: str = "", error: str = ""):
 
 
 @router.post("/api-keys")
-def api_keys_create(
-    request: Request,
-    provider: str = Form(...),
-    key_value: str = Form(...),
-    label: str = Form(""),
-    priority: int = Form(100),
-):
+def api_keys_create(request: Request, provider: str = Form(...),
+                    key_value: str = Form(...), label: str = Form(""),
+                    priority: int = Form(100)):
     kv = key_value.strip()
     if not kv:
         return RedirectResponse("/admin/api-keys?error=Empty+key", status_code=303)
@@ -334,25 +323,22 @@ def api_keys_priority(request: Request, key_id: str, priority: int = Form(...)):
     return RedirectResponse("/admin/api-keys", status_code=303)
 
 
-# ===== provider usage + chart =====
+# ===== provider usage =====
 @router.get("/provider-usage", response_class=HTMLResponse)
 def provider_usage_page(request: Request, saved: str = ""):
     keys = db.list_api_keys()
     rows = []
     for k in keys:
         st = key_status_for_dashboard(k["id"], k["provider"])
-        rows.append({
-            "id": k["id"], "provider": k["provider"],
-            "label": k.get("label") or "—",
-            "key_masked": f"{k['key_value'][:10]}…{k['key_value'][-4:]}",
-            "active": bool(k["active"]), **st,
-        })
+        rows.append({"id": k["id"], "provider": k["provider"],
+                     "label": k.get("label") or "—",
+                     "key_masked": f"{k['key_value'][:10]}…{k['key_value'][-4:]}",
+                     "active": bool(k["active"]), **st})
     agg = {}
     for r in rows:
-        a = agg.setdefault(r["provider"], {
-            "keys": 0, "active_keys": 0, "suspended_keys": 0,
-            "total_requests": 0, "total_tokens_in": 0, "total_tokens_out": 0,
-        })
+        a = agg.setdefault(r["provider"], {"keys": 0, "active_keys": 0,
+                                            "suspended_keys": 0, "total_requests": 0,
+                                            "total_tokens_in": 0, "total_tokens_out": 0})
         a["keys"] += 1
         a["active_keys"] += 1 if r["active"] else 0
         a["suspended_keys"] += 1 if r["suspended"] else 0
@@ -388,24 +374,21 @@ def provider_usage_data(request: Request):
             color = "orange"
         else:
             color = "green"
-        out.append({
-            "key_id": k["id"], "label": k.get("label") or k["key_value"][:12],
-            "provider": k["provider"], "used": used,
-            "remaining": rem_req if rem_req is not None else (
-                (lim_req - used) if lim_req else None),
-            "limit": lim_req, "pct": round(pct, 1), "color": color,
-            "suspended": st["suspended"], "source": source,
-            "reset_at": urow.get("reset_at"),
-        })
+        out.append({"key_id": k["id"], "label": k.get("label") or k["key_value"][:12],
+                    "provider": k["provider"], "used": used,
+                    "remaining": rem_req if rem_req is not None else (
+                        (lim_req - used) if lim_req else None),
+                    "limit": lim_req, "pct": round(pct, 1), "color": color,
+                    "suspended": st["suspended"], "source": source,
+                    "reset_at": urow.get("reset_at")})
     return JSONResponse({"keys": out, "ts": int(_time.time())})
 
 
 @router.post("/provider-usage/{key_id}/unsuspend")
 def unsuspend_key(request: Request, key_id: str):
     with db._conn() as c:
-        c.execute(
-            "UPDATE provider_usage SET suspended = 0, suspended_at = NULL "
-            "WHERE key_id = ? AND day = ?", (key_id, db._today()))
+        c.execute("UPDATE provider_usage SET suspended = 0, suspended_at = NULL "
+                  "WHERE key_id = ? AND day = ?", (key_id, db._today()))
     return RedirectResponse("/admin/provider-usage", status_code=303)
 
 
@@ -420,17 +403,14 @@ def routing_page(request: Request, saved: str = ""):
 
 
 @router.post("/routing")
-def routing_save(
-    request: Request,
-    provider_order: str = Form("groq,openrouter"),
-    auto_route: str = Form("0"),
-):
+def routing_save(request: Request, provider_order: str = Form("groq,openrouter"),
+                 auto_route: str = Form("0")):
     db.set_setting("router_provider_order", provider_order)
     db.set_setting("auto_route_enabled", "1" if auto_route == "1" else "0")
     return RedirectResponse("/admin/routing?saved=1", status_code=303)
 
 
-# ===== usage map + pricing =====
+# ===== usage map =====
 @router.get("/usage-map", response_class=HTMLResponse)
 def usage_map_page(request: Request, days: int = 30, saved: str = ""):
     rows = db.user_usage_summary(days)
@@ -452,13 +432,9 @@ def usage_map_page(request: Request, days: int = 30, saved: str = ""):
 
 
 @router.post("/pricing")
-def pricing_save(
-    request: Request,
-    groq_input: float = Form(...),
-    groq_output: float = Form(...),
-    openrouter_input: float = Form(...),
-    openrouter_output: float = Form(...),
-):
+def pricing_save(request: Request, groq_input: float = Form(...),
+                 groq_output: float = Form(...), openrouter_input: float = Form(...),
+                 openrouter_output: float = Form(...)):
     db.set_pricing("groq", groq_input, groq_output)
     db.set_pricing("openrouter", openrouter_input, openrouter_output)
     return RedirectResponse("/admin/usage-map?saved=1", status_code=303)
@@ -513,12 +489,8 @@ def settings_view(request: Request):
 
 
 @router.post("/settings")
-def settings_save(
-    request: Request,
-    answer_enabled: str = Form("0"),
-    max_tokens: str = Form("80"),
-    system_prompt_note: str = Form(""),
-):
+def settings_save(request: Request, answer_enabled: str = Form("0"),
+                  max_tokens: str = Form("80"), system_prompt_note: str = Form("")):
     db.set_setting("answer_enabled", "1" if answer_enabled == "1" else "0")
     db.set_setting("max_tokens", max_tokens)
     db.set_setting("system_prompt_note", system_prompt_note)

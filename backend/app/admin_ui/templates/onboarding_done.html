@@ -5,10 +5,19 @@
 <body class="login-body" style="display:block;padding:40px;">
 <div style="max-width:640px;margin:0 auto;">
     <h1>You're all set</h1>
-    {% if email_sent %}
-    <p>Your activation key has been sent to <strong>{{ email }}</strong>.</p>
+
+    {% if chat_linked and email_sent %}
+        <div class="flash success">
+            ✅ Your activation key was just sent to you on Telegram.
+        </div>
+    {% elif chat_linked %}
+        <div class="flash warn">
+            ⚠️ Telegram linked, but the message couldn't be delivered. Your key is below — save it.
+        </div>
     {% else %}
-    <p>Email delivery failed — copy your key now:</p>
+        <div class="flash warn">
+            ⚠️ Telegram was not linked. Copy your key below — you won't see it again.
+        </div>
     {% endif %}
 
     <div class="card" style="background:#0a0c12;margin:16px 0;">

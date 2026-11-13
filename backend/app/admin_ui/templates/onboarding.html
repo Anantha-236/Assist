@@ -9,6 +9,15 @@
 <div style="max-width:640px;margin:0 auto;">
     <h1>Welcome to Assist</h1>
     <p class="muted">Fill in your profile so answers can be personalized to your role.</p>
+    {% if chat_linked %}
+        <div class="flash success">
+            ✅ Telegram linked. You'll receive your activation key by message after submitting.
+        </div>
+    {% else %}
+        <div class="flash warn">
+            ⚠️ Telegram not linked. Start the bot with the invite link first to receive your key by Telegram. Otherwise you'll only see it on the next screen.
+        </div>
+    {% endif %}
 
     <form method="post" action="/onboard/{{ token }}" class="stack">
         <label>Full name

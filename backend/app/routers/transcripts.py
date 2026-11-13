@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import db, email_service
+from .. import db
 from ..deps import require_token
+from ..telegram_service import send_transcript
 
 router = APIRouter(prefix="/transcripts", tags=["transcripts"])
 
@@ -33,18 +34,31 @@ def upload(req: UploadRequest, token: dict = Depends(require_token)):
             "segment_count": len(req.segments)}
 
 
-@router.post("/{session_id}/email")
-async def email_me(session_id: str, token: dict = Depends(require_token)):
+@router.post("/{session_id}/telegram")
+async def send_to_telegram(session_id: str, token: dict = Depends(require_token)):
+    """Send a transcript via Telegram to the user's linked chat."""
+    features = db.get_features(token["sub"])
+    if not features.get("email_transcripts", False):
+        raise HTTPException(403, "transcript delivery not enabled")
+
     t = db.get_transcript_by_session(session_id)
     if t is None or t["key_id"] != token["sub"]:
         raise HTTPException(404, "transcript not found")
-    to = db.get_key_email(token["sub"])
-    if not to:
-        raise HTTPException(400, "no email on file — ask admin to add it")
-    ok = await email_service.send_transcript_email(to, t)
+
+    chat_id = db.get_key_telegram_chat_id(token["sub"])
+    if not chat_id:
+        raise HTTPException(400, "no Telegram linked — complete onboarding via the bot first")
+
+    ok, err = await send_transcript(chat_id, t)
     if not ok:
-        raise HTTPException(500, "email delivery failed")
-    return {"ok": True, "to": to}
+        raise HTTPException(500, err or "telegram delivery failed")
+    return {"ok": True, "chat_id": chat_id}
+
+
+# Backward-compat alias: old desktop clients call /email
+@router.post("/{session_id}/email")
+async def send_compat(session_id: str, token: dict = Depends(require_token)):
+    return await send_to_telegram(session_id, token)
 
 
 @router.get("")

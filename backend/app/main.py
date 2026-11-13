@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     await close_client()
 
 
-app = FastAPI(title="Assist Backend", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Assist Backend", version="0.5.0", lifespan=lifespan)
 
 _PUBLIC_ADMIN_PATHS = {
     "/admin/login", "/admin/login/start",
@@ -44,7 +44,6 @@ _PUBLIC_ADMIN_PATHS = {
 async def admin_auth_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith("/admin") and path not in _PUBLIC_ADMIN_PATHS:
-        # JSON API + data endpoint require admin session too
         if not request.session.get("admin"):
             if "text/html" in (request.headers.get("accept") or ""):
                 return RedirectResponse("/admin/login", status_code=303)
@@ -67,7 +66,7 @@ app.include_router(admin_api_keys.router)
 app.include_router(answer.router)
 app.include_router(answers.router)
 app.include_router(me.router)
-app.include_router(onboarding.router)
+app.include_router(onboarding.router)      # includes /telegram-webhook
 app.include_router(transcripts.router)
 app.include_router(usage.router)
 app.include_router(admin_ui_routes.router)

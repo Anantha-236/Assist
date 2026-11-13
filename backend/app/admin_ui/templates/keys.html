@@ -3,25 +3,39 @@
 {% block content %}
 <h2>Activation keys</h2>
 
-{% if invited %}<div class="flash success">Signup link sent.</div>{% endif %}
-{% if request.query_params.get('invited') %}<div class="flash success">Invite sent.</div>{% endif %}
+{% if telegram_link %}
+<div class="flash success">
+    <strong>Invite created.</strong> Send this Telegram link to the user:
+    <br><br>
+    <code style="user-select:all;font-size:14px;">{{ telegram_link }}</code>
+    <br><br>
+    <small class="muted">
+        When they open it, Telegram will link to their account and send them the onboarding URL.
+    </small>
+</div>
+{% endif %}
 
-<h3>Send signup link</h3>
+{% if error %}<div class="flash error">{{ error }}</div>{% endif %}
+
+<h3>Send Telegram invite (recommended for new users)</h3>
 <form method="post" action="/admin/keys/invite" class="inline-form">
     <input type="email" name="email" placeholder="user@example.com"
            required style="flex:1;">
-    <button type="submit">Send onboarding link</button>
+    <button type="submit">Generate Telegram link</button>
 </form>
 <p class="muted small" style="margin-top:-16px;margin-bottom:24px;">
-    User fills their own profile, gets the activation key by email, pastes it into the desktop app.
+    Generates a `t.me` deep link. Share it with the user — they'll get their key via Telegram after onboarding.
 </p>
 
-<h3>Or create a key directly</h3>
+<h3>Or create a key directly (existing Telegram users only)</h3>
 <form method="post" action="/admin/keys" class="inline-form">
     <input type="text" name="label" placeholder="Label (e.g. Alice's laptop)" maxlength="60">
-    <input type="email" name="send_to_email" placeholder="Email to send key to (optional)">
-    <button type="submit">Create &amp; optionally email</button>
+    <input type="email" name="send_to_email" placeholder="Telegram-linked email (optional)">
+    <button type="submit">Create &amp; send via Telegram</button>
 </form>
+<p class="muted small" style="margin-top:-16px;margin-bottom:24px;">
+    Only works if the user has already linked their Telegram account via invite.
+</p>
 
 <table class="table">
 <thead>
@@ -41,6 +55,9 @@
         {% if k.revoked %}<span class="badge red">revoked</span>
         {% elif k.device_fingerprint %}<span class="badge green">bound</span>
         {% else %}<span class="badge">unused</span>{% endif %}
+        {% if k.telegram_chat_id %}
+            <span class="badge green" title="Telegram linked">✈️</span>
+        {% endif %}
     </td>
     <td>{{ k.usage_today }}</td>
     <td>{{ k.usage_total }}</td>
