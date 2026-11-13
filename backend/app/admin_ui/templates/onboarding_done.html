@@ -1,0 +1,30 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Done — Assist</title>
+<link rel="stylesheet" href="/static/admin.css"></head>
+<body class="login-body" style="display:block;padding:40px;">
+<div style="max-width:640px;margin:0 auto;">
+    <h1>You're all set</h1>
+    {% if email_sent %}
+    <p>Your activation key has been sent to <strong>{{ email }}</strong>.</p>
+    {% else %}
+    <p>Email delivery failed — copy your key now:</p>
+    {% endif %}
+
+    <div class="card" style="background:#0a0c12;margin:16px 0;">
+        <div class="label">Activation key</div>
+        <p style="font-size:20px;font-family:monospace;user-select:all;margin-top:8px;">
+            {{ key }}
+        </p>
+    </div>
+
+    <h3>Next steps</h3>
+    <ol>
+        <li>Download <strong>Assist-v1.3.zip</strong></li>
+        <li>Unzip, double-click <code>Assist.exe</code></li>
+        <li>Click "More info → Run anyway" on the Windows warning</li>
+        <li>Paste the key above when the activation dialog appears</li>
+    </ol>
+</div>
+</body>
+</html>

@@ -12,7 +12,10 @@ from . import auth, db
 from .admin_ui import routes as admin_ui_routes
 from .config import SESSION_SECRET
 from .llm import close_client
-from .routers import activation, admin, answer, transcripts, usage
+from .routers import (
+    activation, admin, admin_api_keys, answer, answers, me,
+    onboarding, transcripts, usage,
+)
 
 
 @asynccontextmanager
@@ -23,21 +26,17 @@ async def lifespan(app: FastAPI):
         db.insert_key(key_id, key_value, label="bootstrap")
         print("=" * 78)
         print(f"  BOOTSTRAP KEY:  {key_value}")
-        print("  Use this to activate your first device.")
         print("=" * 78)
     yield
     await close_client()
 
 
-app = FastAPI(title="Assist Backend", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="Assist Backend", version="0.4.0", lifespan=lifespan)
 
-# Middleware order: last-added runs first (outermost).
-# We want SessionMiddleware to run BEFORE the admin check,
-# so admin check is registered first, Session last.
 _PUBLIC_ADMIN_PATHS = {
-    "/admin/login",
-    "/admin/login/request-otp",
-    "/admin/login/verify-otp",
+    "/admin/login", "/admin/login/start",
+    "/admin/login/verify-totp", "/admin/setup-totp",
+    "/admin/setup-totp/verify",
 }
 
 
@@ -45,17 +44,17 @@ _PUBLIC_ADMIN_PATHS = {
 async def admin_auth_middleware(request: Request, call_next):
     path = request.url.path
     if path.startswith("/admin") and path not in _PUBLIC_ADMIN_PATHS:
+        # JSON API + data endpoint require admin session too
         if not request.session.get("admin"):
-            return RedirectResponse("/admin/login", status_code=303)
+            if "text/html" in (request.headers.get("accept") or ""):
+                return RedirectResponse("/admin/login", status_code=303)
+            return Response(status_code=403)
     return await call_next(request)
 
 
 app.add_middleware(
-    SessionMiddleware,
-    secret_key=SESSION_SECRET,
-    session_cookie="assist_session",
-    max_age=60 * 60 * 8,
-    same_site="lax",
+    SessionMiddleware, secret_key=SESSION_SECRET,
+    session_cookie="assist_session", max_age=60 * 60 * 8, same_site="lax",
 )
 
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -64,10 +63,13 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 app.include_router(activation.router)
 app.include_router(admin.router)
+app.include_router(admin_api_keys.router)
 app.include_router(answer.router)
+app.include_router(answers.router)
+app.include_router(me.router)
+app.include_router(onboarding.router)
 app.include_router(transcripts.router)
 app.include_router(usage.router)
-
 app.include_router(admin_ui_routes.router)
 
 

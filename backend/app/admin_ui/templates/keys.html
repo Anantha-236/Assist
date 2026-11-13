@@ -3,16 +3,31 @@
 {% block content %}
 <h2>Activation keys</h2>
 
+{% if invited %}<div class="flash success">Signup link sent.</div>{% endif %}
+{% if request.query_params.get('invited') %}<div class="flash success">Invite sent.</div>{% endif %}
+
+<h3>Send signup link</h3>
+<form method="post" action="/admin/keys/invite" class="inline-form">
+    <input type="email" name="email" placeholder="user@example.com"
+           required style="flex:1;">
+    <button type="submit">Send onboarding link</button>
+</form>
+<p class="muted small" style="margin-top:-16px;margin-bottom:24px;">
+    User fills their own profile, gets the activation key by email, pastes it into the desktop app.
+</p>
+
+<h3>Or create a key directly</h3>
 <form method="post" action="/admin/keys" class="inline-form">
-    <input type="text" name="label" placeholder="Label (optional)" maxlength="60">
-    <button type="submit">Create key</button>
+    <input type="text" name="label" placeholder="Label (e.g. Alice's laptop)" maxlength="60">
+    <input type="email" name="send_to_email" placeholder="Email to send key to (optional)">
+    <button type="submit">Create &amp; optionally email</button>
 </form>
 
 <table class="table">
 <thead>
 <tr>
-    <th>Key</th><th>Label</th><th>Status</th>
-    <th>Today</th><th>Total</th><th>Created</th>
+    <th>Key</th><th>Label</th><th>Tier</th><th>Limit/day</th>
+    <th>Status</th><th>Today</th><th>Total</th><th>Created</th>
 </tr>
 </thead>
 <tbody>
@@ -20,6 +35,8 @@
 <tr>
     <td><a href="/admin/keys/{{ k.key_id }}"><code>{{ k.key_value }}</code></a></td>
     <td>{{ k.label or '—' }}</td>
+    <td><span class="badge">{{ k.tier or 'free' }}</span></td>
+    <td>{{ k.daily_limit or 200 }}</td>
     <td>
         {% if k.revoked %}<span class="badge red">revoked</span>
         {% elif k.device_fingerprint %}<span class="badge green">bound</span>
@@ -30,7 +47,7 @@
     <td class="muted small">{{ k.created_at[:10] }}</td>
 </tr>
 {% else %}
-<tr><td colspan="6" class="muted">No keys yet.</td></tr>
+<tr><td colspan="8" class="muted">No keys yet.</td></tr>
 {% endfor %}
 </tbody>
 </table>

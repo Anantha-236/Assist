@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Assist — Complete your profile</title>
+    <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body class="login-body" style="display:block;padding:40px;">
+<div style="max-width:640px;margin:0 auto;">
+    <h1>Welcome to Assist</h1>
+    <p class="muted">Fill in your profile so answers can be personalized to your role.</p>
+
+    <form method="post" action="/onboard/{{ token }}" class="stack">
+        <label>Full name
+            <input type="text" name="full_name" required placeholder="Ananth Kumar">
+        </label>
+        <label>Current or target role
+            <input type="text" name="role" required placeholder="Backend Engineer">
+        </label>
+        <label>Years of experience
+            <input type="text" name="experience" required placeholder="3 years">
+        </label>
+        <label>Core skills (comma-separated)
+            <input type="text" name="skills" required placeholder="Python, Kafka, distributed systems">
+        </label>
+        <label>Current company (optional)
+            <input type="text" name="company" placeholder="Acme Corp">
+        </label>
+        <label>Target role (if different)
+            <input type="text" name="target_role" placeholder="Senior Backend Engineer">
+        </label>
+        <label>Target company (optional)
+            <input type="text" name="target_company" placeholder="Google">
+        </label>
+        <label>Target salary (optional)
+            <input type="text" name="target_salary" placeholder="₹25–35 LPA">
+        </label>
+        <label>Notice period
+            <input type="text" name="notice_period" placeholder="30 days">
+        </label>
+        <label>Answer style
+            <select name="answer_style">
+                <option value="">Default (2 sentences)</option>
+                <option value="star">STAR (Situation, Task, Action, Result)</option>
+                <option value="concise">Concise</option>
+                <option value="detailed">Detailed</option>
+            </select>
+        </label>
+        <button type="submit">Get my activation key</button>
+    </form>
+</div>
+</body>
+</html>

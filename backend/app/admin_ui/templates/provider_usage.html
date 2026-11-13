@@ -2,9 +2,75 @@
 {% block title %}Provider Usage{% endblock %}
 {% block content %}
 <h2>Free-tier usage &amp; limits</h2>
-<p class="muted">Each key is auto-suspended at 98% of its daily limit. Suspended keys are skipped until the next daily reset (UTC).</p>
+<p class="muted">Live quota per key. Green = healthy, orange = 80%+, red = suspended at 98%.</p>
 
 {% if saved %}<div class="flash success">Updated.</div>{% endif %}
+
+<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;
+            padding:16px;margin-bottom:24px;">
+    <canvas id="usageChart" height="120"></canvas>
+    <p class="muted small" id="chartUpdated" style="margin-top:8px;">loading…</p>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const COLORS = { green: '#10b981', orange: '#f59e0b', red: '#ef4444' };
+let chart = null;
+
+async function fetchUsage() {
+    try {
+        const r = await fetch('/admin/api/provider-usage/data');
+        const data = await r.json();
+        render(data);
+        document.getElementById('chartUpdated').textContent =
+            'updated ' + new Date(data.ts * 1000).toLocaleTimeString();
+    } catch (e) {
+        document.getElementById('chartUpdated').textContent = 'fetch error: ' + e;
+    }
+}
+
+function render(data) {
+    const labels = data.keys.map(k => `${k.provider}/${k.label}`);
+    const values = data.keys.map(k => k.pct);
+    const colors = data.keys.map(k => COLORS[k.color] || COLORS.green);
+    const rems = data.keys.map(k => {
+        if (k.remaining == null) return 'remaining unknown';
+        return `${k.remaining.toLocaleString()} / ${(k.limit || 0).toLocaleString()} left`;
+    });
+
+    if (!chart) {
+        chart = new Chart(document.getElementById('usageChart'), {
+            type: 'bar',
+            data: { labels, datasets: [{
+                label: 'Daily quota used (%)', data: values,
+                backgroundColor: colors, borderColor: colors, borderWidth: 1,
+            }]},
+            options: {
+                responsive: true, animation: { duration: 250 },
+                scales: {
+                    y: { beginAtZero: true, max: 100,
+                         ticks: { callback: v => v + '%' },
+                         grid: { color: 'rgba(255,255,255,0.06)' } },
+                    x: { grid: { display: false } },
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { callbacks: { afterLabel: (ctx) => rems[ctx.dataIndex] } },
+                },
+            },
+        });
+    } else {
+        chart.data.labels = labels;
+        chart.data.datasets[0].data = values;
+        chart.data.datasets[0].backgroundColor = colors;
+        chart.data.datasets[0].borderColor = colors;
+        chart.update('none');
+    }
+}
+
+fetchUsage();
+setInterval(fetchUsage, 15000);
+</script>
 
 <h3>Per-provider summary</h3>
 <div class="grid" style="margin-bottom:24px;">
@@ -23,7 +89,7 @@
         {% endif %}
     </div>
 {% else %}
-    <div class="card"><div class="muted">No keys yet — add one on the API Keys page.</div></div>
+    <div class="card"><div class="muted">No keys yet — add one on API Keys page.</div></div>
 {% endfor %}
 </div>
 
@@ -57,9 +123,9 @@
         {% endif %}
     </td>
     <td>
-        {% set tok_total = r.tokens_in + r.tokens_out %}
+        {% set tok = r.tokens_in + r.tokens_out %}
         {% if r.token_limit %}
-            {{ "{:,}".format(tok_total) }} / {{ "{:,}".format(r.token_limit) }}
+            {{ "{:,}".format(tok) }} / {{ "{:,}".format(r.token_limit) }}
             <div style="height:6px;background:var(--border);border-radius:3px;margin-top:4px;overflow:hidden;">
                 <div style="height:100%;
                     width: {{ [r.token_pct, 100]|min if r.token_pct is not none else 0 }}%;
@@ -68,7 +134,7 @@
             </div>
             <span class="muted small">{{ r.token_pct or 0 }}%</span>
         {% else %}
-            {{ "{:,}".format(tok_total) }} <span class="muted small">(no daily cap)</span>
+            {{ "{:,}".format(tok) }} <span class="muted small">(no daily cap)</span>
         {% endif %}
     </td>
     <td>
