@@ -24,25 +24,25 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
-def _ctx(request, **kw):
+def _ctx(request: Request, **kw):
     base = {"request": request, "admin": True, "active": ""}
     base.update(kw)
     return base
 
 
-def _render(request, name, **kw):
+def _render(request: Request, name: str, **kw):
     return templates.TemplateResponse(
         request=request, name=name, context=_ctx(request, **kw))
 
 
 # ===== auth (TOTP) =====
 @router.get("/login", response_class=HTMLResponse)
-def login_form(request, error=""):
+def login_form(request: Request, error: str = ""):
     return _render(request, "login.html", error=error, active="login")
 
 
 @router.post("/login/start")
-def login_start(request, email: str = Form(...)):
+def login_start(request: Request, email: str = Form(...)):
     e = email.strip().lower()
     if e not in [x.lower() for x in ADMIN_EMAILS]:
         return RedirectResponse("/admin/login?error=Email+not+authorised", status_code=303)
@@ -52,7 +52,7 @@ def login_start(request, email: str = Form(...)):
 
 
 @router.get("/setup-totp", response_class=HTMLResponse)
-def setup_totp(request, email="", error=""):
+def setup_totp(request: Request, email: str = "", error: str = ""):
     e = email.strip().lower()
     if e not in [x.lower() for x in ADMIN_EMAILS]:
         return RedirectResponse("/admin/login?error=Email+not+authorised", status_code=303)
@@ -61,20 +61,22 @@ def setup_totp(request, email="", error=""):
     request.session["pending_totp_email"] = e
     uri = pyotp.totp.TOTP(secret).provisioning_uri(name=e, issuer_name="Assist Admin")
     img = qrcode.make(uri)
-    buf = io.BytesIO(); img.save(buf, format="PNG")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
     qr_b64 = base64.b64encode(buf.getvalue()).decode()
     return _render(request, "setup_totp.html", email=e, secret=secret,
                    qr_b64=qr_b64, error=error, active="login")
 
 
 @router.post("/setup-totp/verify")
-def setup_totp_verify(request, code: str = Form(...)):
+def setup_totp_verify(request: Request, code: str = Form(...)):
     secret = request.session.get("pending_totp_secret")
     email = request.session.get("pending_totp_email")
     if not secret or not email:
         return RedirectResponse("/admin/login?error=Session+expired", status_code=303)
     if not pyotp.TOTP(secret).verify(code.strip(), valid_window=1):
-        return RedirectResponse(f"/admin/setup-totp?email={email}&error=Invalid+code", status_code=303)
+        return RedirectResponse(f"/admin/setup-totp?email={email}&error=Invalid+code",
+                                status_code=303)
     db.set_totp_secret(email, secret)
     request.session.pop("pending_totp_secret", None)
     request.session.pop("pending_totp_email", None)
@@ -84,7 +86,7 @@ def setup_totp_verify(request, code: str = Form(...)):
 
 
 @router.get("/login/verify-totp", response_class=HTMLResponse)
-def login_verify_totp_form(request, email="", error=""):
+def login_verify_totp_form(request: Request, email: str = "", error: str = ""):
     e = email.strip().lower()
     if e not in [x.lower() for x in ADMIN_EMAILS]:
         return RedirectResponse("/admin/login?error=Email+not+authorised", status_code=303)
@@ -94,7 +96,7 @@ def login_verify_totp_form(request, email="", error=""):
 
 
 @router.post("/login/verify-totp")
-def login_verify_totp(request, email: str = Form(...), code: str = Form(...)):
+def login_verify_totp(request: Request, email: str = Form(...), code: str = Form(...)):
     e = email.strip().lower()
     secret = db.get_totp_secret(e)
     if not secret:
@@ -103,17 +105,22 @@ def login_verify_totp(request, email: str = Form(...), code: str = Form(...)):
         request.session["admin"] = True
         request.session["admin_email"] = e
         return RedirectResponse("/admin/", status_code=303)
-    return RedirectResponse(f"/admin/login/verify-totp?email={e}&error=Invalid+code", status_code=303)
+    return RedirectResponse(
+        f"/admin/login/verify-totp?email={e}&error=Invalid+code", status_code=303)
 
 
 @router.get("/logout")
-def logout(request):
+def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/admin/login", status_code=303)
 
 
 @router.post("/api/reset-totp")
-def reset_totp_api(email: str = Form(...), x_admin_password: str = Header(None)):
+def reset_totp_api(
+    request: Request,
+    email: str = Form(...),
+    x_admin_password: str = Header(None),
+):
     if x_admin_password != ADMIN_PASSWORD:
         raise HTTPException(401, "admin password required")
     db.clear_totp_secret(email.strip().lower())
@@ -122,7 +129,7 @@ def reset_totp_api(email: str = Form(...), x_admin_password: str = Header(None))
 
 # ===== overview =====
 @router.get("/", response_class=HTMLResponse)
-def overview(request):
+def overview(request: Request):
     keys = db.list_keys()
     active = [k for k in keys if not k["revoked"]]
     return _render(request, "dashboard.html", active="overview",
@@ -136,7 +143,7 @@ def overview(request):
 
 # ===== keys =====
 @router.get("/keys", response_class=HTMLResponse)
-def keys_list(request, invited: str = ""):
+def keys_list(request: Request, invited: str = ""):
     keys = db.list_keys()
     for k in keys:
         k["usage_today"] = db.get_today_usage(k["key_id"])
@@ -146,7 +153,11 @@ def keys_list(request, invited: str = ""):
 
 
 @router.post("/keys")
-async def create_key(request, label: str = Form(""), send_to_email: str = Form("")):
+async def create_key(
+    request: Request,
+    label: str = Form(""),
+    send_to_email: str = Form(""),
+):
     key_id, key_value = auth.generate_key()
     db.insert_key(key_id, key_value, label=label or None)
     if send_to_email.strip():
@@ -159,7 +170,7 @@ async def create_key(request, label: str = Form(""), send_to_email: str = Form("
 
 
 @router.post("/keys/invite")
-async def keys_invite(request, email: str = Form(...)):
+async def keys_invite(request: Request, email: str = Form(...)):
     from ..routers.onboarding import create_invite
     from ..email_service import _send
     token = create_invite(email.strip().lower())
@@ -178,7 +189,9 @@ async def keys_invite(request, email: str = Form(...)):
 
 
 @router.get("/keys/{key_id}", response_class=HTMLResponse)
-def key_detail(request, key_id, created="", saved=""):
+def key_detail(
+    request: Request, key_id: str, created: str = "", saved: str = ""
+):
     row = db.get_key_by_id(key_id)
     if row is None:
         return RedirectResponse("/admin/keys", status_code=303)
@@ -196,20 +209,28 @@ def key_detail(request, key_id, created="", saved=""):
 
 
 @router.post("/keys/{key_id}/revoke")
-def revoke_key_form(key_id):
+def revoke_key_form(request: Request, key_id: str):
     db.revoke_key(key_id)
     return RedirectResponse(f"/admin/keys/{key_id}", status_code=303)
 
 
 @router.post("/keys/{key_id}/profile")
 def set_profile_form(
-    key_id,
-    role: str = Form(""), experience: str = Form(""), skills: str = Form(""),
-    company: str = Form(""), target_role: str = Form(""),
-    target_company: str = Form(""), industry: str = Form(""),
-    achievements: str = Form(""), projects: str = Form(""),
-    target_salary: str = Form(""), notice_period: str = Form(""),
-    answer_style: str = Form(""), email: str = Form(""),
+    request: Request,
+    key_id: str,
+    role: str = Form(""),
+    experience: str = Form(""),
+    skills: str = Form(""),
+    company: str = Form(""),
+    target_role: str = Form(""),
+    target_company: str = Form(""),
+    industry: str = Form(""),
+    achievements: str = Form(""),
+    projects: str = Form(""),
+    target_salary: str = Form(""),
+    notice_period: str = Form(""),
+    answer_style: str = Form(""),
+    email: str = Form(""),
 ):
     profile = {"role": role, "experience": experience, "skills": skills,
                "company": company, "target_role": target_role,
@@ -231,14 +252,17 @@ def set_profile_form(
 
 
 @router.post("/keys/{key_id}/limit")
-def set_limit_form(key_id, tier: str = Form("free"), daily_limit: int = Form(200)):
+def set_limit_form(
+    request: Request, key_id: str,
+    tier: str = Form("free"), daily_limit: int = Form(200),
+):
     daily_limit = max(1, min(daily_limit, 100_000))
     db.set_key_limit(key_id, tier, daily_limit)
     return RedirectResponse(f"/admin/keys/{key_id}?saved=1", status_code=303)
 
 
 @router.get("/keys/{key_id}/features", response_class=HTMLResponse)
-def features_form(request, key_id):
+def features_form(request: Request, key_id: str):
     row = db.get_key_by_id(key_id)
     if row is None:
         return RedirectResponse("/admin/keys", status_code=303)
@@ -249,7 +273,9 @@ def features_form(request, key_id):
 
 
 @router.post("/keys/{key_id}/features")
-async def features_save(request, key_id, grant_basic: str = Form("0")):
+async def features_save(
+    request: Request, key_id: str, grant_basic: str = Form("0")
+):
     form = await request.form()
     if grant_basic == "1":
         features = dict(DEFAULT_FEATURES)
@@ -261,7 +287,7 @@ async def features_save(request, key_id, grant_basic: str = Form("0")):
 
 # ===== API key vault =====
 @router.get("/api-keys", response_class=HTMLResponse)
-def api_keys_page(request, saved="", error=""):
+def api_keys_page(request: Request, saved: str = "", error: str = ""):
     keys = db.list_api_keys()
     return _render(request, "api_keys.html", active="api_keys",
                    keys=keys, saved=bool(saved), error=error)
@@ -269,22 +295,27 @@ def api_keys_page(request, saved="", error=""):
 
 @router.post("/api-keys")
 def api_keys_create(
-    provider: str = Form(...), key_value: str = Form(...),
-    label: str = Form(""), priority: int = Form(100),
+    request: Request,
+    provider: str = Form(...),
+    key_value: str = Form(...),
+    label: str = Form(""),
+    priority: int = Form(100),
 ):
     kv = key_value.strip()
     if not kv:
         return RedirectResponse("/admin/api-keys?error=Empty+key", status_code=303)
     if provider == "groq" and not kv.startswith("gsk_"):
-        return RedirectResponse("/admin/api-keys?error=groq+keys+start+with+gsk_", status_code=303)
+        return RedirectResponse("/admin/api-keys?error=groq+keys+start+with+gsk_",
+                                status_code=303)
     if provider == "openrouter" and not kv.startswith("sk-or-"):
-        return RedirectResponse("/admin/api-keys?error=openrouter+keys+start+with+sk-or-", status_code=303)
+        return RedirectResponse("/admin/api-keys?error=openrouter+keys+start+with+sk-or-",
+                                status_code=303)
     db.create_api_key(provider, kv, label or None, priority)
     return RedirectResponse("/admin/api-keys?saved=1", status_code=303)
 
 
 @router.post("/api-keys/{key_id}/toggle")
-def api_keys_toggle(key_id):
+def api_keys_toggle(request: Request, key_id: str):
     k = db.get_api_key(key_id)
     if k:
         db.set_api_key_active(key_id, not bool(k["active"]))
@@ -292,20 +323,20 @@ def api_keys_toggle(key_id):
 
 
 @router.post("/api-keys/{key_id}/delete")
-def api_keys_delete(key_id):
+def api_keys_delete(request: Request, key_id: str):
     db.delete_api_key(key_id)
     return RedirectResponse("/admin/api-keys", status_code=303)
 
 
 @router.post("/api-keys/{key_id}/priority")
-def api_keys_priority(key_id, priority: int = Form(...)):
+def api_keys_priority(request: Request, key_id: str, priority: int = Form(...)):
     db.set_api_key_priority(key_id, priority)
     return RedirectResponse("/admin/api-keys", status_code=303)
 
 
 # ===== provider usage + chart =====
 @router.get("/provider-usage", response_class=HTMLResponse)
-def provider_usage_page(request, saved=""):
+def provider_usage_page(request: Request, saved: str = ""):
     keys = db.list_api_keys()
     rows = []
     for k in keys:
@@ -318,9 +349,10 @@ def provider_usage_page(request, saved=""):
         })
     agg = {}
     for r in rows:
-        a = agg.setdefault(r["provider"], {"keys": 0, "active_keys": 0,
-                                            "suspended_keys": 0, "total_requests": 0,
-                                            "total_tokens_in": 0, "total_tokens_out": 0})
+        a = agg.setdefault(r["provider"], {
+            "keys": 0, "active_keys": 0, "suspended_keys": 0,
+            "total_requests": 0, "total_tokens_in": 0, "total_tokens_out": 0,
+        })
         a["keys"] += 1
         a["active_keys"] += 1 if r["active"] else 0
         a["suspended_keys"] += 1 if r["suspended"] else 0
@@ -333,7 +365,7 @@ def provider_usage_page(request, saved=""):
 
 
 @router.get("/api/provider-usage/data")
-def provider_usage_data(request):
+def provider_usage_data(request: Request):
     import time as _time
     keys = db.list_api_keys()
     out = []
@@ -369,7 +401,7 @@ def provider_usage_data(request):
 
 
 @router.post("/provider-usage/{key_id}/unsuspend")
-def unsuspend_key(key_id):
+def unsuspend_key(request: Request, key_id: str):
     with db._conn() as c:
         c.execute(
             "UPDATE provider_usage SET suspended = 0, suspended_at = NULL "
@@ -379,7 +411,7 @@ def unsuspend_key(key_id):
 
 # ===== routing =====
 @router.get("/routing", response_class=HTMLResponse)
-def routing_page(request, saved=""):
+def routing_page(request: Request, saved: str = ""):
     return _render(request, "routing.html", active="routing",
                    registry=MODEL_REGISTRY,
                    provider_order=db.get_setting("router_provider_order", "groq,openrouter"),
@@ -388,8 +420,11 @@ def routing_page(request, saved=""):
 
 
 @router.post("/routing")
-def routing_save(provider_order: str = Form("groq,openrouter"),
-                 auto_route: str = Form("0")):
+def routing_save(
+    request: Request,
+    provider_order: str = Form("groq,openrouter"),
+    auto_route: str = Form("0"),
+):
     db.set_setting("router_provider_order", provider_order)
     db.set_setting("auto_route_enabled", "1" if auto_route == "1" else "0")
     return RedirectResponse("/admin/routing?saved=1", status_code=303)
@@ -397,7 +432,7 @@ def routing_save(provider_order: str = Form("groq,openrouter"),
 
 # ===== usage map + pricing =====
 @router.get("/usage-map", response_class=HTMLResponse)
-def usage_map_page(request, days: int = 30, saved: str = ""):
+def usage_map_page(request: Request, days: int = 30, saved: str = ""):
     rows = db.user_usage_summary(days)
     pricing = db.get_pricing()
 
@@ -417,8 +452,13 @@ def usage_map_page(request, days: int = 30, saved: str = ""):
 
 
 @router.post("/pricing")
-def pricing_save(groq_input: float = Form(...), groq_output: float = Form(...),
-                 openrouter_input: float = Form(...), openrouter_output: float = Form(...)):
+def pricing_save(
+    request: Request,
+    groq_input: float = Form(...),
+    groq_output: float = Form(...),
+    openrouter_input: float = Form(...),
+    openrouter_output: float = Form(...),
+):
     db.set_pricing("groq", groq_input, groq_output)
     db.set_pricing("openrouter", openrouter_input, openrouter_output)
     return RedirectResponse("/admin/usage-map?saved=1", status_code=303)
@@ -426,13 +466,13 @@ def pricing_save(groq_input: float = Form(...), groq_output: float = Form(...),
 
 # ===== transcripts =====
 @router.get("/transcripts", response_class=HTMLResponse)
-def transcripts_list(request):
+def transcripts_list(request: Request):
     return _render(request, "transcripts.html", active="transcripts",
                    transcripts=db.list_all_transcripts(100))
 
 
 @router.get("/transcripts/{transcript_id}", response_class=HTMLResponse)
-def transcript_detail(request, transcript_id):
+def transcript_detail(request: Request, transcript_id: str):
     t = db.get_transcript(transcript_id)
     if t is None:
         return RedirectResponse("/admin/transcripts", status_code=303)
@@ -441,7 +481,7 @@ def transcript_detail(request, transcript_id):
 
 # ===== answers =====
 @router.get("/keys/{key_id}/answers", response_class=HTMLResponse)
-def key_answers(request, key_id):
+def key_answers(request: Request, key_id: str):
     row = db.get_key_by_id(key_id)
     if row is None:
         return RedirectResponse("/admin/keys", status_code=303)
@@ -451,14 +491,14 @@ def key_answers(request, key_id):
 
 
 @router.post("/answers/{ans_id}/review")
-async def trigger_review_form(ans_id):
+async def trigger_review_form(request: Request, ans_id: str):
     from ..answer_reviewer import review_answer
     await review_answer(ans_id)
     return RedirectResponse(f"/admin/answers/{ans_id}", status_code=303)
 
 
 @router.get("/answers/{ans_id}", response_class=HTMLResponse)
-def answer_detail(request, ans_id):
+def answer_detail(request: Request, ans_id: str):
     ans = db.get_answer(ans_id)
     if not ans:
         return RedirectResponse("/admin/keys", status_code=303)
@@ -467,14 +507,18 @@ def answer_detail(request, ans_id):
 
 # ===== settings =====
 @router.get("/settings", response_class=HTMLResponse)
-def settings_view(request):
+def settings_view(request: Request):
     return _render(request, "settings.html", active="settings",
                    settings=db.get_all_settings())
 
 
 @router.post("/settings")
-def settings_save(answer_enabled: str = Form("0"), max_tokens: str = Form("80"),
-                  system_prompt_note: str = Form("")):
+def settings_save(
+    request: Request,
+    answer_enabled: str = Form("0"),
+    max_tokens: str = Form("80"),
+    system_prompt_note: str = Form(""),
+):
     db.set_setting("answer_enabled", "1" if answer_enabled == "1" else "0")
     db.set_setting("max_tokens", max_tokens)
     db.set_setting("system_prompt_note", system_prompt_note)
