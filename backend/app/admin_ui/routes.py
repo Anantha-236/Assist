@@ -528,3 +528,34 @@ async def support_thread_reply(request: Request, thread_id: str,
     db.register_admin_chat("web", "web-dashboard")
     await admin_reply_to_thread("web", thread_id, message)
     return RedirectResponse(f"/admin/support/{thread_id}?sent=1", status_code=303)
+
+# ===== API key test (dashboard "Test key" button) =====
+@router.post("/api-test")
+async def admin_api_test(request: Request):
+    """Test the primary provider's API key by sending a tiny request."""
+    import httpx
+    from ..config import GROQ_API_KEY, GROQ_BASE_URL, GROQ_MODEL_PRIMARY
+
+    keys = db.get_active_keys("groq")
+    test_key = keys[0]["key_value"] if keys else GROQ_API_KEY
+    if not test_key:
+        return {"ok": False, "error": "No Groq key configured"}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            r = await client.post(
+                f"{GROQ_BASE_URL}/chat/completions",
+                headers={"Authorization": f"Bearer {test_key}"},
+                json={
+                    "model": GROQ_MODEL_PRIMARY,
+                    "messages": [{"role": "user", "content": "Say OK"}],
+                    "max_tokens": 5,
+                },
+            )
+        if r.status_code != 200:
+            return {"ok": False, "status": r.status_code,
+                    "error": r.text[:300]}
+        reply = r.json()["choices"][0]["message"]["content"]
+        return {"ok": True, "model": GROQ_MODEL_PRIMARY, "reply": reply.strip()[:60]}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}

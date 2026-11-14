@@ -61,16 +61,32 @@ async def handle_update(update: dict):
         await send_message(chat_id, f"Unknown command: <code>{html.escape(text[:30])}</code>")
 
 
-async def handle_register_admin(chat_id, text):
+async def handle_register_admin(chat_id: str, text: str):
     parts = text.split(maxsplit=1)
     if len(parts) < 2:
-        await send_message(chat_id, "Usage: /register_admin <password>")
+        await send_message(
+            chat_id,
+            "Usage: <code>/register_admin &lt;ADMIN_PASSWORD&gt;</code>\n\n"
+            "The password is <code>ASSIST_ADMIN_PASSWORD</code> from your backend env."
+        )
         return
-    if not ADMIN_PASSWORD or parts[1].strip() != ADMIN_PASSWORD:
-        await send_message(chat_id, "Wrong password.")
+
+    password = parts[1].strip()
+    if not ADMIN_PASSWORD or password != ADMIN_PASSWORD:
+        await send_message(chat_id, "❌ Wrong password.")
         return
+
     db.register_admin_chat(chat_id, "admin")
-    await send_message(chat_id, "You are registered. Use /inbox, /reply, /thread, /broadcast, or /users.")
+    await send_message(
+        chat_id,
+        "✅ You are now registered as an admin.\n\n"
+        "Commands:\n"
+        "<b>/inbox</b> — pending user messages\n"
+        "<b>/reply &lt;thread_id&gt; &lt;text&gt;</b> — reply to user\n"
+        "<b>/thread &lt;thread_id&gt;</b> — view full conversation\n"
+        "<b>/broadcast &lt;text&gt;</b> — send to all users\n"
+        "<b>/users</b> — list all users"
+    )
 
 
 async def handle_inbox(chat_id):
