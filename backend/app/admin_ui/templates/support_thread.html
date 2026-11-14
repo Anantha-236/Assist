@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Thread - {{ user_label }}{% endblock %}
+{% block content %}
+<h2>Conversation with {{ user_label }}</h2>
+<p><a href="/admin/support">Back to inbox</a></p>
+{% if sent %}<div class="flash success">Reply sent.</div>{% endif %}
+<div style="background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:16px;max-height:500px;overflow-y:auto;margin-bottom:16px;">
+{% for message in messages %}
+<div style="margin-bottom:12px;{% if message.direction == 'admin_to_user' %}text-align:right;{% endif %}">
+    <div style="display:inline-block;max-width:70%;padding:10px 14px;border-radius:10px;{% if message.direction == 'user_to_admin' %}background:#2a2f3a;color:#e6e8ee;{% else %}background:#6366f1;color:#fff;{% endif %}">
+        {{ message.text }}
+        <div style="font-size:11px;opacity:0.6;margin-top:4px;">{{ message.created_at[:16] }}</div>
+    </div>
+</div>
+{% endfor %}
+</div>
+<h3>Reply</h3>
+<form method="post" action="/admin/support/{{ thread_id }}/reply" class="stack">
+    <textarea name="message" rows="4" required placeholder="Type your reply to the user..."></textarea>
+    <button type="submit">Send via Telegram</button>
+</form>
+{% endblock %}

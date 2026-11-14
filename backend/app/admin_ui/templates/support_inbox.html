@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Support{% endblock %}
+{% block content %}
+<h2>Support inbox</h2>
+<p class="muted">Messages from users via Telegram.</p>
+<table class="table">
+<thead><tr><th>User</th><th>Last message</th><th>Unread</th><th>When</th><th></th></tr></thead>
+<tbody>
+{% for thread in threads %}
+<tr>
+    <td>{{ thread.user_label }}</td>
+    <td class="muted small">{{ (thread.last_text or '')[:80] }}</td>
+    <td>{% if thread.unread > 0 %}<span class="badge red">{{ thread.unread }}</span>{% else %}—{% endif %}</td>
+    <td class="muted small">{{ thread.last_at[:16] }}</td>
+    <td><a href="/admin/support/{{ thread.thread_id }}">Open</a></td>
+</tr>
+{% else %}<tr><td colspan="5" class="muted">No messages yet.</td></tr>{% endfor %}
+</tbody>
+</table>
+{% endblock %}

@@ -70,12 +70,9 @@ async def telegram_webhook(request: Request):
                     "❌ This invite link is invalid or has expired. "
                     "Ask the admin for a new one."
                 )
-        else:
-            await send_message(
-                str(chat_id),
-                "👋 Hi! Assist is an invite-only meeting assistant. "
-                "Ask the admin for an invite link."
-            )
+            return {"ok": True}
+    from ..telegram_bot import handle_update
+    await handle_update(update)
     return {"ok": True}
 
 

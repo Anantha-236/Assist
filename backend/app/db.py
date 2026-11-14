@@ -191,6 +191,8 @@ def init_db():
             if col not in pcols:
                 c.execute(f"ALTER TABLE provider_usage ADD COLUMN {col} {typ}")
 
+        _init_support_tables(c)
+
 
 # ===== activation keys =====
 def insert_key(key_id, key_value, label=None):
@@ -298,6 +300,14 @@ def set_key_telegram_chat_id(key_id, chat_id):
 def get_key_telegram_chat_id(key_id):
     row = get_key_by_id(key_id)
     return row["telegram_chat_id"] if row and "telegram_chat_id" in row.keys() else None
+
+
+def get_key_by_telegram_chat_id(chat_id):
+    with _conn() as c:
+        row = c.execute(
+            "SELECT * FROM activation_keys WHERE telegram_chat_id = ? "
+            "ORDER BY created_at DESC LIMIT 1", (str(chat_id),)).fetchone()
+        return dict(row) if row else None
 
 
 def find_chat_id_by_email(email):
@@ -826,3 +836,126 @@ def save_answer_review(ans_id, review):
     with _conn() as c:
         c.execute("UPDATE interview_answers SET review_json = ? WHERE id = ?",
                   (json.dumps(review), ans_id))
+
+
+# ===== support messaging =====
+def _init_support_tables(connection=None):
+    """Create the append-only support tables on first run."""
+    if connection is None:
+        with _conn() as c:
+            _init_support_tables(c)
+        return
+    connection.executescript("""
+        CREATE TABLE IF NOT EXISTS admin_chats (
+            chat_id TEXT PRIMARY KEY,
+            admin_email TEXT,
+            registered_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS support_messages (
+            id TEXT PRIMARY KEY,
+            thread_id TEXT NOT NULL,
+            from_chat_id TEXT NOT NULL,
+            from_key_id TEXT,
+            to_chat_id TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            text TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            read_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_support_thread
+            ON support_messages(thread_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_support_unread
+            ON support_messages(to_chat_id, read_at);
+    """)
+
+
+def register_admin_chat(chat_id: str, admin_email: str):
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO admin_chats (chat_id, admin_email, registered_at) "
+            "VALUES (?, ?, ?) ON CONFLICT(chat_id) DO UPDATE SET "
+            "admin_email = excluded.admin_email",
+            (str(chat_id), admin_email, datetime.now(timezone.utc).isoformat()))
+
+
+def is_admin_chat(chat_id: str) -> bool:
+    with _conn() as c:
+        row = c.execute("SELECT 1 FROM admin_chats WHERE chat_id = ?",
+                        (str(chat_id),)).fetchone()
+        return row is not None
+
+
+def list_admin_chats() -> list[dict]:
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM admin_chats ORDER BY registered_at DESC").fetchall()]
+
+
+def get_or_create_thread(from_chat_id: str) -> str:
+    return str(from_chat_id)
+
+
+def insert_support_message(
+    thread_id: str, from_chat_id: str, to_chat_id: str,
+    direction: str, text: str, from_key_id: str | None = None,
+) -> str:
+    msg_id = uuid.uuid4().hex[:12]
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO support_messages "
+            "(id, thread_id, from_chat_id, from_key_id, to_chat_id, "
+            "direction, text, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (msg_id, thread_id, str(from_chat_id), from_key_id, str(to_chat_id),
+             direction, text, datetime.now(timezone.utc).isoformat()))
+    return msg_id
+
+
+def list_thread_messages(thread_id: str, limit: int = 100) -> list[dict]:
+    with _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM support_messages WHERE thread_id = ? "
+            "ORDER BY created_at ASC LIMIT ?", (thread_id, limit)).fetchall()]
+
+
+def list_support_threads() -> list[dict]:
+    with _conn() as c:
+        rows = c.execute("""
+            SELECT s.thread_id, MAX(s.created_at) AS last_at,
+                (SELECT text FROM support_messages s2
+                 WHERE s2.thread_id = s.thread_id
+                 ORDER BY s2.created_at DESC LIMIT 1) AS last_text,
+                (SELECT COUNT(*) FROM support_messages s3
+                 WHERE s3.thread_id = s.thread_id
+                   AND s3.direction = 'user_to_admin'
+                   AND s3.read_at IS NULL) AS unread,
+                (SELECT from_chat_id FROM support_messages s4
+                 WHERE s4.thread_id = s.thread_id LIMIT 1) AS user_chat_id
+            FROM support_messages s GROUP BY s.thread_id ORDER BY last_at DESC
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+
+def mark_thread_read(thread_id: str, admin_chat_id: str):
+    with _conn() as c:
+        c.execute(
+            "UPDATE support_messages SET read_at = ? WHERE thread_id = ? "
+            "AND read_at IS NULL AND (to_chat_id = ? OR "
+            "(? = 'web' AND direction = 'user_to_admin'))",
+            (datetime.now(timezone.utc).isoformat(), thread_id,
+             str(admin_chat_id), str(admin_chat_id)))
+
+
+def list_all_user_chat_ids() -> list[str]:
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT telegram_chat_id FROM activation_keys "
+            "WHERE telegram_chat_id IS NOT NULL AND revoked = 0").fetchall()
+        return [r["telegram_chat_id"] for r in rows]
+
+
+def get_key_label_by_chat_id(chat_id: str) -> str | None:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT label FROM activation_keys WHERE telegram_chat_id = ? "
+            "ORDER BY created_at DESC LIMIT 1", (str(chat_id),)).fetchone()
+        return row["label"] if row else None

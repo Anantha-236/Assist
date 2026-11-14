@@ -495,3 +495,36 @@ def settings_save(request: Request, answer_enabled: str = Form("0"),
     db.set_setting("max_tokens", max_tokens)
     db.set_setting("system_prompt_note", system_prompt_note)
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
+
+
+# ===== support inbox =====
+@router.get("/support", response_class=HTMLResponse)
+def support_inbox(request: Request):
+    threads = db.list_support_threads()
+    for thread in threads:
+        thread["user_label"] = db.get_key_label_by_chat_id(thread["user_chat_id"]) or thread["user_chat_id"]
+    return _render(request, "support_inbox.html", active="support", threads=threads)
+
+
+@router.get("/support/{thread_id}", response_class=HTMLResponse)
+def support_thread(request: Request, thread_id: str, sent: str = ""):
+    messages = db.list_thread_messages(thread_id)
+    if not messages:
+        return RedirectResponse("/admin/support", status_code=303)
+    user_chat_id = messages[0]["from_chat_id"]
+    user_label = db.get_key_label_by_chat_id(user_chat_id) or user_chat_id
+    db.mark_thread_read(thread_id, "web")
+    return _render(request, "support_thread.html", active="support", thread_id=thread_id,
+                   messages=messages, user_label=user_label, user_chat_id=user_chat_id,
+                   sent=bool(sent))
+
+
+@router.post("/support/{thread_id}/reply")
+async def support_thread_reply(request: Request, thread_id: str,
+                               message: str = Form(...)):
+    from ..support import admin_reply_to_thread
+    if not db.list_thread_messages(thread_id):
+        return RedirectResponse("/admin/support", status_code=303)
+    db.register_admin_chat("web", "web-dashboard")
+    await admin_reply_to_thread("web", thread_id, message)
+    return RedirectResponse(f"/admin/support/{thread_id}?sent=1", status_code=303)
