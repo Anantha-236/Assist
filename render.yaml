@@ -16,6 +16,8 @@ services:
         sync: false
       - key: ASSIST_SESSION_SECRET
         sync: false
+      - key: BOOTSTRAP_KEYS
+        sync: false
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_BASE_URL
