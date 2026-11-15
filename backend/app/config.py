@@ -74,3 +74,10 @@ OPENROUTER_MODELS_CODE = _split_env("OPENROUTER_MODELS_CODE")
 QUOTA_REFRESH_SEC = int(os.environ.get("QUOTA_REFRESH_SEC", "300"))
 QUOTA_WARN_FRACTION = float(os.environ.get("QUOTA_WARN_FRACTION", "0.20"))
 DAILY_QUESTION_LIMIT = int(os.environ.get("DAILY_QUESTION_LIMIT", "200"))
+
+# Telegram chat IDs that should remain administrators across redeploys.
+ADMIN_TELEGRAM_CHAT_IDS = [
+    chat_id.strip()
+    for chat_id in os.environ.get("ADMIN_TELEGRAM_CHAT_IDS", "").split(",")
+    if chat_id.strip()
+]

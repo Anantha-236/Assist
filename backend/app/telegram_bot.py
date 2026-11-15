@@ -1,6 +1,6 @@
 """Telegram command dispatcher and support channel for Assist."""
 
-import html
+import html as _html
 import os
 
 from . import db
@@ -35,6 +35,10 @@ async def handle_update(update: dict):
         await handle_start(chat_id, text, user_name)
     elif text == "/help":
         await handle_help(chat_id, db.is_admin_chat(chat_id))
+    elif text == "/whoami":
+        await send_message(
+            chat_id, f"Your Telegram chat ID: <code>{_html.escape(chat_id)}</code>"
+        )
     elif text == "/status":
         await handle_status(chat_id)
     elif text == "/transcripts":
@@ -53,12 +57,22 @@ async def handle_update(update: dict):
         await handle_about(chat_id)
     elif text and not text.startswith("/"):
         if db.is_admin_chat(chat_id):
-            await send_message(chat_id, "Use /reply <thread_id> <message> to reply.")
+            await send_message(
+                chat_id,
+                "<b>You are registered as an admin.</b>\n\n"
+                "Use /reply &lt;thread_id&gt; &lt;message&gt; to reply.\n"
+                "Use /inbox to see pending messages."
+            )
         else:
             from .support import relay_user_message
             await relay_user_message(chat_id, text)
     elif text.startswith("/"):
-        await send_message(chat_id, f"Unknown command: <code>{html.escape(text[:30])}</code>")
+        await send_message(
+            chat_id,
+            f"Unknown command: <code>{_html.escape(text[:30])}</code>\n\n"
+            "Type /help for commands.\n\n"
+            "<i>To reach support, send a plain text message.</i>",
+        )
 
 
 async def handle_register_admin(chat_id: str, text: str):
@@ -67,7 +81,9 @@ async def handle_register_admin(chat_id: str, text: str):
         await send_message(
             chat_id,
             "Usage: <code>/register_admin &lt;ADMIN_PASSWORD&gt;</code>\n\n"
-            "The password is <code>ASSIST_ADMIN_PASSWORD</code> from your backend env."
+            f"Your chat ID: <code>{_html.escape(chat_id)}</code>\n\n"
+            "To persist this admin across redeploys, set "
+            f"<code>ADMIN_TELEGRAM_CHAT_IDS={_html.escape(chat_id)}</code>."
         )
         return
 
@@ -80,6 +96,8 @@ async def handle_register_admin(chat_id: str, text: str):
     await send_message(
         chat_id,
         "✅ You are now registered as an admin.\n\n"
+        f"Your chat ID: <code>{_html.escape(chat_id)}</code>\n"
+        f"Persist it with <code>ADMIN_TELEGRAM_CHAT_IDS={_html.escape(chat_id)}</code>.\n\n"
         "Commands:\n"
         "<b>/inbox</b> — pending user messages\n"
         "<b>/reply &lt;thread_id&gt; &lt;text&gt;</b> — reply to user\n"
@@ -101,8 +119,8 @@ async def handle_inbox(chat_id):
     for thread in threads[:15]:
         label = db.get_key_label_by_chat_id(thread["user_chat_id"]) or thread["user_chat_id"]
         unread = thread["unread"] or 0
-        lines.append(f"<b>{html.escape(str(label)[:30])}</b> ({unread} unread)\n"
-                     f"<i>{html.escape((thread['last_text'] or '')[:50])}</i>\n"
+        lines.append(f"<b>{_html.escape(str(label)[:30])}</b> ({unread} unread)\n"
+                     f"<i>{_html.escape((thread['last_text'] or '')[:50])}</i>\n"
                      f"<code>/reply {thread['thread_id']} &lt;text&gt;</code>")
     await send_message(chat_id, "\n\n".join(lines))
 
@@ -155,21 +173,21 @@ async def handle_users(chat_id):
         return
     keys = db.list_keys()
     await send_message(chat_id, "<b>Users</b>\n\n" + "\n".join(
-        f"{html.escape(k.get('label') or 'unnamed')} — <code>{k['key_value']}</code>"
+        f"{_html.escape(k.get('label') or 'unnamed')} — <code>{k['key_value']}</code>"
         for k in keys[:20]) if keys else "No users yet.")
 
 
 async def handle_start(chat_id, text, user_name):
     key = db.get_key_by_telegram_chat_id(chat_id)
     if key:
-        await send_message(chat_id, f"Welcome back, <b>{html.escape(user_name)}</b>. Type /help.")
+        await send_message(chat_id, f"Welcome back, <b>{_html.escape(user_name)}</b>. Type /help.")
     else:
         await send_message(chat_id, "Assist is invite-only. Ask the admin for an invite link.")
 
 
 async def handle_help(chat_id, is_admin):
     text = ("<b>Assist commands</b>\n\n/status, /profile, /transcripts, "
-            "/transcript &lt;id&gt;, /answers, /support, /unlink, /about")
+            "/transcript &lt;id&gt;, /answers, /support, /whoami, /unlink, /about")
     if is_admin:
         text += "\n\n<b>Admin</b>\n/inbox, /thread &lt;id&gt;, /reply &lt;id&gt; &lt;text&gt;, /broadcast &lt;text&gt;, /users"
     await send_message(chat_id, text)
@@ -183,7 +201,7 @@ async def handle_status(chat_id):
     used = db.get_today_usage(key["key_id"])
     limit = db.get_key_daily_limit(key["key_id"], 200)
     status = "revoked" if key["revoked"] else ("active" if key["device_fingerprint"] else "not activated")
-    await send_message(chat_id, f"<b>Account status</b>\n\nKey: <code>{html.escape(key['key_value'])}</code>\nStatus: {status}\nToday: {used} / {limit}")
+    await send_message(chat_id, f"<b>Account status</b>\n\nKey: <code>{_html.escape(key['key_value'])}</code>\nStatus: {status}\nToday: {used} / {limit}")
 
 
 async def handle_profile(chat_id):
@@ -193,7 +211,7 @@ async def handle_profile(chat_id):
         return
     profile = db.get_full_profile(key["key_id"]) or {}
     await send_message(chat_id, "<b>Your profile</b>\n\n" + "\n".join(
-        f"<b>{html.escape(str(name))}:</b> {html.escape(str(value))}"
+        f"<b>{_html.escape(str(name))}:</b> {_html.escape(str(value))}"
         for name, value in profile.items()))
 
 
@@ -222,12 +240,12 @@ async def handle_answers(chat_id):
     key = db.get_key_by_telegram_chat_id(chat_id)
     answers = db.list_answers_for_key(key["key_id"], limit=10) if key else []
     await send_message(chat_id, "<b>Answer history</b>\n\n" + "\n".join(
-        html.escape((answer.get("question") or "")[:80]) for answer in answers)
+        _html.escape((answer.get("question") or "")[:80]) for answer in answers)
         if answers else "No saved answers yet.")
 
 
 async def handle_support(chat_id):
-    await send_message(chat_id, f"Send a message here to reach the admin. Email: {html.escape(SUPPORT_CONTACT)}")
+    await send_message(chat_id, f"Send a message here to reach the admin. Email: {_html.escape(SUPPORT_CONTACT)}")
 
 
 async def handle_unlink(chat_id):

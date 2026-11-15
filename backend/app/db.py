@@ -1015,3 +1015,16 @@ def get_key_label_by_chat_id(chat_id: str) -> str | None:
             "SELECT label FROM activation_keys WHERE telegram_chat_id = ? "
             "ORDER BY created_at DESC LIMIT 1", (str(chat_id),)).fetchone()
         return row["label"] if row else None
+
+
+def import_admin_chats():
+    """Import administrator Telegram chats from the persistent environment."""
+    from .config import ADMIN_TELEGRAM_CHAT_IDS
+
+    imported = 0
+    for chat_id in ADMIN_TELEGRAM_CHAT_IDS:
+        register_admin_chat(chat_id, "from_env")
+        imported += 1
+    if imported:
+        print(f"[bootstrap] imported {imported} admin chat(s)")
+    return imported
