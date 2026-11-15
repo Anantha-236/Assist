@@ -1,6 +1,7 @@
+import io
 import os
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from .. import db
@@ -57,3 +58,39 @@ def update_profile(req: ProfileUpdate, token: dict = Depends(require_token)):
              req.target_role, req.target_company, req.target_salary,
              req.notice_period, req.answer_style, key_id))
     return {"ok": True}
+
+
+@router.post("/resume")
+async def upload_resume(
+    file: UploadFile = File(...),
+    token: dict = Depends(require_token),
+):
+    """Parse an uploaded resume and merge the result into the user's profile."""
+    contents = await file.read()
+    filename = (file.filename or "").lower()
+
+    if filename.endswith(".pdf"):
+        try:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(contents))
+            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        except ImportError as exc:
+            raise HTTPException(500, "pypdf is not installed on the server") from exc
+        except Exception as exc:
+            raise HTTPException(422, f"PDF parse failed: {exc}") from exc
+    elif filename.endswith((".md", ".txt")):
+        text = contents.decode("utf-8", errors="ignore")
+    else:
+        raise HTTPException(400, "Unsupported file. Use PDF, MD, or TXT.")
+
+    if len(text.strip()) < 100:
+        raise HTTPException(422, "Resume text too short to parse")
+
+    from ..resume_parser import parse_resume, save_parsed_profile
+
+    parsed = await parse_resume(text)
+    if not parsed:
+        raise HTTPException(422, "Could not extract profile. Try a clearer file.")
+    save_parsed_profile(token["sub"], parsed)
+    return {"ok": True, "parsed": parsed}

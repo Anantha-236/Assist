@@ -126,7 +126,11 @@ class AnswerCard(QFrame):
     def _open_settings(self):
         from .settings import SettingsDialog
 
-        SettingsDialog(self.window()).exec()
+        dialog = SettingsDialog(self.window())
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        dialog.exec()
 
     def set_status(self, text: str):
         from ..pause_state import is_paused
@@ -168,6 +172,15 @@ class Overlay(QWidget):
         self._positioned = False
         self._has_content = False
         self._restore_position()
+
+    def moveEvent(self, event):
+        super().moveEvent(event)
+        if hasattr(self, "_save_timer") and self._save_timer is not None:
+            self._save_timer.stop()
+        self._save_timer = QTimer(self)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._save_position)
+        self._save_timer.start(400)
 
     def _place_initial(self):
         screen = QApplication.primaryScreen().geometry()
@@ -232,16 +245,15 @@ class Overlay(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.pos()
-            event.accept()
-
-    def mouseMoveEvent(self, event):
-        if self._drag_offset is not None and event.buttons() == Qt.LeftButton:
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            handle = self.windowHandle()
+            if handle is not None:
+                try:
+                    handle.startSystemMove()
+                    event.accept()
+                    return
+                except RuntimeError:
+                    pass
             event.accept()
 
     def mouseReleaseEvent(self, event):
-        if self._drag_offset is not None:
-            self._save_position()
-        self._drag_offset = None
         event.accept()
