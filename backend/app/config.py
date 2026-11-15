@@ -29,7 +29,7 @@ GROQ_BASE_URL = os.environ.get(
     "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
 )
 GROQ_MODEL_PRIMARY = os.environ.get(
-    "GROQ_MODEL_PRIMARY", "llama-3.1-8b-instant"
+    "GROQ_MODEL_PRIMARY", "openai/gpt-oss-20b"
 )
 GROQ_MODEL_FALLBACK = os.environ.get(
     "GROQ_MODEL_FALLBACK", "llama-3.3-70b-versatile"

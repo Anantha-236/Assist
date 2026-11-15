@@ -23,7 +23,7 @@ services:
       - key: GROQ_BASE_URL
         value: https://api.groq.com/openai/v1
       - key: GROQ_MODEL_PRIMARY
-        value: qwen/qwen3.8-27b
+        value: openai/gpt-oss-20b
       - key: GROQ_MODEL_FALLBACK
         value: allam-2-7b
       - key: LLM_PROVIDER
