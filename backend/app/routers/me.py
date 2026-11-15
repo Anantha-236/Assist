@@ -1,3 +1,5 @@
+import os
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -5,6 +7,16 @@ from .. import db
 from ..deps import require_token
 
 router = APIRouter(prefix="/me", tags=["me"])
+
+
+@router.get("/links")
+def my_links(token: dict = Depends(require_token)):
+    """Return useful URLs for the current user."""
+    bot = os.environ.get("TELEGRAM_BOT_USERNAME", "").lstrip("@")
+    return {
+        "telegram_bot_url": f"https://t.me/{bot}" if bot else None,
+        "support_contact": os.environ.get("ASSIST_SUPPORT_CONTACT", ""),
+    }
 
 
 @router.get("/profile")
