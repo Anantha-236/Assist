@@ -192,6 +192,32 @@ async def create_key(request: Request, label: str = Form(""),
     return RedirectResponse(f"/admin/keys/{key_id}?created=1", status_code=303)
 
 
+@router.get("/api/keys-export")
+def keys_export(request: Request):
+    """Return activation keys in BOOTSTRAP_KEYS-compatible JSON."""
+    exportable = []
+    for key in db.list_keys():
+        exportable.append({
+            "key_id": key["key_id"],
+            "key_value": key["key_value"],
+            "label": key.get("label"),
+            "tier": key.get("tier", "free"),
+            "daily_limit": key.get("daily_limit", 200),
+            "role": key.get("role"),
+            "experience": key.get("experience"),
+            "skills": key.get("skills"),
+            "company": key.get("company"),
+            "email": key.get("email"),
+            "telegram_chat_id": key.get("telegram_chat_id"),
+            "features_json": key.get("features_json"),
+        })
+    return JSONResponse({
+        "count": len(exportable),
+        "hint": "Copy the array below into Render's BOOTSTRAP_KEYS env var",
+        "keys": exportable,
+    })
+
+
 @router.get("/keys/{key_id}", response_class=HTMLResponse)
 def key_detail(request: Request, key_id: str, created: str = "",
                saved: str = "", tg_error: str = ""):

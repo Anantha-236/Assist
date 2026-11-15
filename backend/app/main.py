@@ -21,6 +21,7 @@ from .routers import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init_db()
+    db.import_bootstrap_keys()
     if db.count_keys() == 0:
         key_id, key_value = auth.generate_key()
         db.insert_key(key_id, key_value, label="bootstrap")

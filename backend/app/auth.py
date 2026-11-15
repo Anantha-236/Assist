@@ -42,9 +42,13 @@ def activate(key_value: str, fingerprint: str) -> tuple[str | None, str | None]:
         return None, "invalid activation key"
     if row["revoked"]:
         return None, "activation key has been revoked"
-    if row["device_fingerprint"] and row["device_fingerprint"] != fingerprint:
-        return None, "activation key already bound to another device"
-    if not row["device_fingerprint"]:
+    previous_fingerprint = row["device_fingerprint"]
+    if previous_fingerprint != fingerprint:
+        if previous_fingerprint:
+            print(
+                f"[auth] key {row['key_id'][:8]} re-bound "
+                f"({previous_fingerprint[:8]} -> {fingerprint[:8]})"
+            )
         db.bind_key(row["key_id"], fingerprint)
     return create_token(row["key_id"], fingerprint), None
 

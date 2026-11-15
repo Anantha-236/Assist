@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import secrets
 import sqlite3
 import uuid
@@ -330,6 +331,61 @@ def list_keys():
 def count_keys():
     with _conn() as c:
         return c.execute("SELECT COUNT(*) FROM activation_keys").fetchone()[0]
+
+
+def import_bootstrap_keys():
+    """Re-create activation keys from the persistent BOOTSTRAP_KEYS setting."""
+    raw = os.environ.get("BOOTSTRAP_KEYS", "").strip()
+    if not raw:
+        return 0
+    try:
+        keys = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        print(f"[bootstrap] BOOTSTRAP_KEYS parse error: {exc}")
+        return 0
+    if not isinstance(keys, list):
+        print("[bootstrap] BOOTSTRAP_KEYS must contain a JSON list")
+        return 0
+
+    imported = 0
+    with _conn() as c:
+        for key in keys:
+            if not isinstance(key, dict):
+                continue
+            key_value = key.get("key_value")
+            if not key_value:
+                continue
+            existing = c.execute(
+                "SELECT 1 FROM activation_keys WHERE key_value = ?",
+                (key_value,),
+            ).fetchone()
+            if existing:
+                continue
+            c.execute(
+                "INSERT INTO activation_keys "
+                "(key_id, key_value, created_at, label, tier, daily_limit, "
+                "role, experience, skills, company, email, telegram_chat_id, "
+                "features_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    key.get("key_id") or uuid.uuid4().hex,
+                    key_value,
+                    datetime.now(timezone.utc).isoformat(),
+                    key.get("label"),
+                    key.get("tier", "free"),
+                    key.get("daily_limit", 200),
+                    key.get("role"),
+                    key.get("experience"),
+                    key.get("skills"),
+                    key.get("company"),
+                    key.get("email"),
+                    key.get("telegram_chat_id"),
+                    key.get("features_json"),
+                ),
+            )
+            imported += 1
+    if imported:
+        print(f"[bootstrap] imported {imported} keys from BOOTSTRAP_KEYS")
+    return imported
 
 
 # ===== invites (Telegram onboarding) =====
