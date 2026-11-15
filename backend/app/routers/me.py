@@ -49,14 +49,32 @@ class ProfileUpdate(BaseModel):
 def update_profile(req: ProfileUpdate, token: dict = Depends(require_token)):
     """User updates their own profile."""
     key_id = token["sub"]
+    import json as _json
+
+    profile = {
+        "role": req.role,
+        "experience": req.experience,
+        "skills": req.skills,
+        "company": req.company,
+        "target_role": req.target_role,
+        "target_company": req.target_company,
+        "target_salary": req.target_salary,
+        "notice_period": req.notice_period,
+        "answer_style": req.answer_style,
+    }
     with db._conn() as c:
         c.execute(
-            "UPDATE activation_keys SET role=?, experience=?, skills=?, "
-            "company=?, target_role=?, target_company=?, target_salary=?, "
-            "notice_period=?, answer_style=? WHERE key_id=?",
-            (req.role, req.experience, req.skills, req.company,
-             req.target_role, req.target_company, req.target_salary,
-             req.notice_period, req.answer_style, key_id))
+            "UPDATE activation_keys SET profile_json=?, role=?, experience=?, "
+            "skills=?, company=?, target_role=?, target_company=?, "
+            "target_salary=?, notice_period=?, answer_style=? WHERE key_id=?",
+            (_json.dumps(profile), req.role, req.experience, req.skills,
+             req.company, req.target_role, req.target_company,
+             req.target_salary, req.notice_period, req.answer_style, key_id),
+        )
+    print(
+        f"[profile] updated key {key_id[:8]} -> role={req.role!r}, "
+        f"exp={req.experience!r}, skills={req.skills[:40]!r}"
+    )
     return {"ok": True}
 
 

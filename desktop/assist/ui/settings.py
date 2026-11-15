@@ -183,6 +183,7 @@ class SettingsDialog(QDialog):
             for key, field in self.profile_fields.items()
         }
         payload["answer_style"] = self.answer_style.currentText()
+        print(f"[profile] POST /me/profile payload: {payload}")
         try:
             response = httpx.post(
                 f"{BACKEND_URL}/me/profile",
@@ -190,9 +191,20 @@ class SettingsDialog(QDialog):
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=15.0,
             )
-            response.raise_for_status()
-            self.profile_status.setText("Saved.")
+            print(f"[profile] HTTP {response.status_code}: {response.text[:200]}")
+            if response.status_code == 200:
+                self.profile_status.setText("Saved.")
+            elif response.status_code == 401:
+                self.profile_status.setText(
+                    "Session expired. Delete %APPDATA%\\Assist\\config.json "
+                    "and re-activate."
+                )
+            else:
+                self.profile_status.setText(
+                    f"Save failed: HTTP {response.status_code}"
+                )
         except httpx.HTTPError as exc:
+            print(f"[profile] exception: {type(exc).__name__}: {exc}")
             self.profile_status.setText(f"Save error: {type(exc).__name__}")
 
     def _upload_resume(self):
