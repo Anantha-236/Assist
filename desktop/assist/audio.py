@@ -38,25 +38,24 @@ def _try_winaudio():
 
 
 def _stream_winaudio_capture(cap, stop_event, reload_flag, audio_q):
-    reader = next(
-        (
-            getattr(cap, name)
-            for name in ("read_chunk", "read", "stream", "read_frames", "get_chunk")
-            if hasattr(cap, name)
-        ),
-        None,
-    )
+    reader = getattr(cap, "read_frame", None)
     if reader is None:
-        raise RuntimeError("winaudio Capture has no supported read method")
+        raise RuntimeError("winaudio Capture has no read_frame method")
 
     import soxr
 
     while not stop_event.is_set() and not reload_flag.is_set():
-        chunk = reader()
+        chunk = reader(100)
         if chunk is None:
             time.sleep(0.01)
             continue
-        data = np.asarray(chunk)
+        if isinstance(chunk, bytes):
+            data = np.frombuffer(chunk, dtype=np.int16)
+            if data.size % 2:
+                data = data[:-1]
+            data = data.reshape(-1, 2)
+        else:
+            data = np.asarray(chunk)
         if data.size == 0:
             continue
         if data.dtype == np.int16:
