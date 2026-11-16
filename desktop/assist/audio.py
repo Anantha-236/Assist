@@ -6,6 +6,8 @@ import threading
 import time
 from enum import Enum
 
+import numpy as np
+
 from .config import (
     BLOCK_FRAMES,
     CAPTURE_MODE,
@@ -45,23 +47,14 @@ def _stream_winaudio_capture(cap, stop_event, reload_flag, audio_q):
     import soxr
 
     while not stop_event.is_set() and not reload_flag.is_set():
-        chunk = reader(100)
-        if chunk is None:
+        try:
+            chunk = reader(100)
+        except TypeError:
+            chunk = reader()
+        data = _normalize_winaudio_frame(chunk)
+        if data is None:
             time.sleep(0.01)
             continue
-        if isinstance(chunk, bytes):
-            data = np.frombuffer(chunk, dtype=np.int16)
-            if data.size % 2:
-                data = data[:-1]
-            data = data.reshape(-1, 2)
-        else:
-            data = np.asarray(chunk)
-        if data.size == 0:
-            continue
-        if data.dtype == np.int16:
-            data = data.astype(np.float32) / 32768.0
-        else:
-            data = data.astype(np.float32)
         try:
             audio_q.put_nowait(data)
         except queue.Full:
@@ -74,6 +67,75 @@ def _stream_winaudio_capture(cap, stop_event, reload_flag, audio_q):
         get_ring().write(np.asarray(mono, dtype=np.float32))
 
 
+def _normalize_winaudio_frame(frame):
+    if frame is None:
+        return None
+    if isinstance(frame, (bytes, bytearray, memoryview)):
+        values = np.frombuffer(frame, dtype=np.int16)
+        if values.size % 2:
+            values = values[:-1]
+        frame = values.reshape(-1, 2)
+    elif isinstance(frame, (list, tuple)):
+        frame = np.asarray(frame)
+    elif not isinstance(frame, np.ndarray):
+        return None
+
+    data = np.asarray(frame)
+    if data.size == 0:
+        return None
+    if data.dtype == np.int16:
+        return data.astype(np.float32) / 32768.0
+    return data.astype(np.float32)
+
+
+def _find_active_winaudio_session(winaudio, target_pid=None):
+    try:
+        sessions = winaudio.list_sessions()
+    except Exception as exc:
+        print(f"[capture] list_sessions failed: {exc}", file=sys.stderr)
+        return None
+    keywords = (
+        "zoom",
+        "teams",
+        "ms-teams",
+        "webex",
+        "gotomeeting",
+        "meet",
+        "slack",
+        "discord",
+    )
+    for session in sessions:
+        if getattr(session, "state", None) != "Active":
+            continue
+        if target_pid is not None and session.pid == target_pid:
+            return session
+        haystack = (
+            f"{getattr(session, 'name', '')} "
+            f"{getattr(session, 'host_name', '')}"
+        ).lower()
+        if target_pid is None and any(keyword in haystack for keyword in keywords):
+            return session
+    return None
+
+
+def _construct_winaudio_capture(winaudio, pid):
+    for constructor in (
+        lambda: winaudio.Capture(pid=pid),
+        lambda: winaudio.Capture(target_pid=pid),
+        lambda: winaudio.Capture(pid),
+    ):
+        try:
+            return constructor()
+        except Exception:
+            continue
+    try:
+        capture = winaudio.Capture()
+        capture.target_pid = pid
+        return capture
+    except Exception:
+        return None
+
+
 def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
     winaudio = _try_winaudio()
     if winaudio is None:
@@ -84,25 +146,23 @@ def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
     while not stop_event.is_set():
         if reload_flag.is_set():
             reload_flag.clear()
-        pid = target_pid or find_meeting_pid()
-        if pid is None:
-            print("[capture] no meeting process found; retrying in 2s")
+        session = _find_active_winaudio_session(winaudio, target_pid)
+        if session is None:
+            print("[capture] no active meeting session; retrying in 2s")
             if stop_event.wait(2.0):
                 return
             continue
+
+        pid = session.pid
+        capture = _construct_winaudio_capture(winaudio, pid)
+        if capture is None:
+            print("[capture] could not construct Capture; falling back",
+                  file=sys.stderr)
+            _capture_system_loopback(stop_event, reload_flag, audio_q)
+            return
         try:
-            session = next(
-                (item for item in winaudio.list_sessions() if item.pid == pid),
-                None,
-            )
-            kwargs = {"name": session.name} if session and session.name else {"pid": pid}
-            with winaudio.Capture(
-                **kwargs, sample_rate=CAPTURE_SR, channels=2
-            ) as capture:
-                print(f"[capture] per-process -> PID {pid}")
-                _stream_winaudio_capture(
-                    capture, stop_event, reload_flag, audio_q
-                )
+            print(f"[capture] per-process -> {session.name!r} (PID {pid})")
+            _stream_winaudio_capture(capture, stop_event, reload_flag, audio_q)
         except Exception as exc:
             if stop_event.is_set():
                 return
@@ -110,8 +170,13 @@ def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
                 f"[capture] per-process error: {type(exc).__name__}: {exc}",
                 file=sys.stderr,
             )
-            if stop_event.wait(1.0):
-                return
+        finally:
+            try:
+                capture.stop()
+            except Exception:
+                pass
+        if stop_event.wait(1.0):
+            return
 
 
 def _try_pac():
