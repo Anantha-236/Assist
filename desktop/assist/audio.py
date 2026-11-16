@@ -148,10 +148,9 @@ def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
             reload_flag.clear()
         session = _find_active_winaudio_session(winaudio, target_pid)
         if session is None:
-            print("[capture] no active meeting session; retrying in 2s")
-            if stop_event.wait(2.0):
-                return
-            continue
+            print("[capture] no meeting session — using system loopback fallback")
+            _capture_system_loopback(stop_event, reload_flag, audio_q)
+            return
 
         pid = session.pid
         capture = _construct_winaudio_capture(winaudio, pid)
