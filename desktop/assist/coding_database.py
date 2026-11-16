@@ -125,6 +125,27 @@ CODING_PROBLEMS = [
         "complexity": "O(n) time, O(n) space",
     },
     {
+        "id": "reverse_number",
+        "category": "math",
+        "difficulty": "easy",
+        "patterns": ["reverse a number", "reverse number", "reverse digits",
+                     "reverse integer"],
+        "explanation": "Extract digits from the end and build the reversed number.",
+        "code": {
+            "python": (
+                "def reverse_number(n: int) -> int:\n"
+                "    sign = -1 if n < 0 else 1\n"
+                "    n = abs(n)\n"
+                "    result = 0\n"
+                "    while n:\n"
+                "        result = result * 10 + n % 10\n"
+                "        n //= 10\n"
+                "    return sign * result"
+            ),
+        },
+        "complexity": "O(log10(n)) time, O(1) space",
+    },
+    {
         "id": "palindrome_string",
         "category": "string",
         "difficulty": "easy",
