@@ -1,4 +1,4 @@
-"""Audio capture with watchdog + mode dispatch."""
+"""Audio capture: per-process via sinary-winaudio, robust system loopback fallback."""
 
 import queue
 import sys
@@ -271,8 +271,11 @@ def _capture_system_loopback(stop_event, reload_flag, audio_q):
                             or "invalidated" in err.lower()
                             or "AUDCLNT_E_DEVICE_INVALIDATED" in err
                         ):
-                            print("[capture] endpoint invalidated, reopening",
-                                  file=sys.stderr)
+                            print(
+                                f"[capture] device invalidated on "
+                                f"{speaker.name!r} — reopening",
+                                file=sys.stderr,
+                            )
                             reload_flag.set()
                             break
                         print(f"[capture] record error: {e}", file=sys.stderr)
@@ -331,6 +334,7 @@ def _capture_system_loopback(stop_event, reload_flag, audio_q):
         except Exception as e:
             if stop_event.is_set():
                 break
+            print("[capture] no usable speaker; retrying", file=sys.stderr)
             print(f"[capture] device error: {e}", file=sys.stderr)
             time.sleep(1.0)
 
