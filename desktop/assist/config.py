@@ -11,7 +11,7 @@ BACKEND_URL = "https://assist-backend-d8w1.onrender.com"
 # "system_loopback"  — all speaker audio
 # "per_process"      — only meeting app
 # "auto"             — per-process if available
-CAPTURE_MODE = "system_loopback"
+CAPTURE_MODE = "per_process"
 
 # ---- capture params ----
 CAPTURE_SR = 48000

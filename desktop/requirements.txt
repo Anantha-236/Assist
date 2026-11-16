@@ -1,0 +1,11 @@
+soundcard>=0.4.4
+numpy>=1.26
+soxr>=0.5.0
+webrtcvad-wheels>=2.0.14
+onnx-asr[cpu,hub]>=0.10.0
+psutil>=5.9
+PySide6>=6.8
+httpx[http2]>=0.27
+pycaw>=20240210
+comtypes>=1.2
+sinary-winaudio>=1.0

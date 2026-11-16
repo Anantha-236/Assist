@@ -28,6 +28,93 @@ class CaptureMode(Enum):
     SYSTEM_LOOPBACK = "system_loopback"
 
 
+def _try_winaudio():
+    try:
+        import winaudio
+
+        return winaudio
+    except ImportError:
+        return None
+
+
+def _stream_winaudio_capture(cap, stop_event, reload_flag, audio_q):
+    reader = next(
+        (
+            getattr(cap, name)
+            for name in ("read_chunk", "read", "stream", "read_frames", "get_chunk")
+            if hasattr(cap, name)
+        ),
+        None,
+    )
+    if reader is None:
+        raise RuntimeError("winaudio Capture has no supported read method")
+
+    import soxr
+
+    while not stop_event.is_set() and not reload_flag.is_set():
+        chunk = reader()
+        if chunk is None:
+            time.sleep(0.01)
+            continue
+        data = np.asarray(chunk)
+        if data.size == 0:
+            continue
+        if data.dtype == np.int16:
+            data = data.astype(np.float32) / 32768.0
+        else:
+            data = data.astype(np.float32)
+        try:
+            audio_q.put_nowait(data)
+        except queue.Full:
+            pass
+        mono = data.mean(axis=1) if data.ndim > 1 else data
+        if CAPTURE_SR != STT_SR:
+            mono = soxr.resample(mono, CAPTURE_SR, STT_SR)
+        from .ring_buffer import get_ring
+
+        get_ring().write(np.asarray(mono, dtype=np.float32))
+
+
+def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
+    winaudio = _try_winaudio()
+    if winaudio is None:
+        print("[capture] winaudio not installed; falling back")
+        _capture_system_loopback(stop_event, reload_flag, audio_q)
+        return
+
+    while not stop_event.is_set():
+        if reload_flag.is_set():
+            reload_flag.clear()
+        pid = target_pid or find_meeting_pid()
+        if pid is None:
+            print("[capture] no meeting process found; retrying in 2s")
+            if stop_event.wait(2.0):
+                return
+            continue
+        try:
+            session = next(
+                (item for item in winaudio.list_sessions() if item.pid == pid),
+                None,
+            )
+            kwargs = {"name": session.name} if session and session.name else {"pid": pid}
+            with winaudio.Capture(
+                **kwargs, sample_rate=CAPTURE_SR, channels=2
+            ) as capture:
+                print(f"[capture] per-process -> PID {pid}")
+                _stream_winaudio_capture(
+                    capture, stop_event, reload_flag, audio_q
+                )
+        except Exception as exc:
+            if stop_event.is_set():
+                return
+            print(
+                f"[capture] per-process error: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            if stop_event.wait(1.0):
+                return
+
+
 def _try_pac():
     try:
         from process_audio_capture import ProcessAudioCapture
@@ -115,7 +202,12 @@ def _capture_system_loopback(stop_event, reload_flag, audio_q):
                         if stop_event.is_set():
                             break
                         err = str(e)
-                        if "0x88890004" in err or "invalidated" in err.lower():
+                        if (
+                            "0x88890004" in err
+                            or "0xe000020b" in err.lower()
+                            or "invalidated" in err.lower()
+                            or "AUDCLNT_E_DEVICE_INVALIDATED" in err
+                        ):
                             print("[capture] endpoint invalidated, reopening",
                                   file=sys.stderr)
                             reload_flag.set()
@@ -278,6 +370,10 @@ def capture_loop(stop_event, reload_flag, audio_q, pid: int | None = None):
 
     if pid is None:
         pid = find_meeting_pid()
+
+    if CAPTURE_MODE == "per_process" and _try_winaudio() is not None:
+        _capture_per_process(stop_event, reload_flag, audio_q, pid)
+        return
 
     if CAPTURE_MODE in ("per_process", "auto"):
         PAC = _try_pac()
