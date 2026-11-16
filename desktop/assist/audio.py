@@ -39,6 +39,15 @@ def _try_winaudio():
         return None
 
 
+def _try_pythoncom():
+    try:
+        import pythoncom
+
+        return pythoncom
+    except ImportError:
+        return None
+
+
 def _stream_winaudio_capture(cap, stop_event, reload_flag, audio_q):
     reader = getattr(cap, "read_frame", None)
     if reader is None:
@@ -136,7 +145,7 @@ def _construct_winaudio_capture(winaudio, pid):
         return None
 
 
-def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
+def _capture_per_process_direct(stop_event, reload_flag, audio_q, target_pid=None):
     winaudio = _try_winaudio()
     if winaudio is None:
         print("[capture] winaudio not installed; falling back")
@@ -148,8 +157,6 @@ def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
             reload_flag.clear()
         session = _find_active_winaudio_session(winaudio, target_pid)
         if session is None:
-            print("[capture] no meeting session — using system loopback fallback")
-            _capture_system_loopback(stop_event, reload_flag, audio_q)
             return
 
         pid = session.pid
@@ -176,6 +183,56 @@ def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
                 pass
         if stop_event.wait(1.0):
             return
+
+
+class _WinAudioWorker(threading.Thread):
+    def __init__(self, stop_event, reload_flag, audio_q, target_pid=None):
+        super().__init__(daemon=True)
+        self.stop_event = stop_event
+        self.reload_flag = reload_flag
+        self.audio_q = audio_q
+        self.target_pid = target_pid
+        self.ready = threading.Event()
+        self.failed = False
+
+    def run(self):
+        pythoncom = _try_pythoncom()
+        initialized = False
+        try:
+            if pythoncom is not None:
+                pythoncom.CoInitializeEx(pythoncom.COINIT_APARTMENTTHREADED)
+                initialized = True
+            self.ready.set()
+            _capture_per_process_direct(
+                self.stop_event,
+                self.reload_flag,
+                self.audio_q,
+                self.target_pid,
+            )
+        except Exception as exc:
+            self.failed = True
+            print(
+                f"[capture] per-process worker failed: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            self.ready.set()
+        finally:
+            if initialized:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+
+
+def _capture_per_process(stop_event, reload_flag, audio_q, target_pid=None):
+    worker = _WinAudioWorker(stop_event, reload_flag, audio_q, target_pid)
+    worker.start()
+    worker.ready.wait(timeout=5.0)
+    worker.join()
+    if not stop_event.is_set():
+        print("[capture] no meeting session - using system loopback fallback")
+        _capture_system_loopback(stop_event, reload_flag, audio_q)
 
 
 def _try_pac():
